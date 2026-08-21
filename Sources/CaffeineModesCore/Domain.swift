@@ -1,0 +1,178 @@
+import Foundation
+
+public enum OperatingMode: Equatable, Codable, Sendable {
+    case off
+    case work
+    case night
+    case travel(durationMinutes: Int, expiresAt: Date)
+    case custom
+
+    public var displayName: String {
+        switch self {
+        case .off: "Off"
+        case .work: "Work"
+        case .night: "Night"
+        case .travel: "Travel"
+        case .custom: "Custom"
+        }
+    }
+
+    public var travelDurationMinutes: Int? {
+        guard case let .travel(durationMinutes, _) = self else { return nil }
+        return durationMinutes
+    }
+
+    public static let allowedTravelDurations = [30, 60, 90, 120]
+}
+
+public enum ControlHealth: String, Equatable, Codable, Sendable {
+    case ready
+    case amphetamineMissing
+    case unsupportedVersion
+    case automationDenied
+    case setupIncomplete
+    case conflicted
+    case backendMismatch
+}
+
+public struct AmphetamineState: Equatable, Codable, Sendable {
+    public var sessionIsActive: Bool
+    public var displaySleepAllowed: Bool
+    public var closedDisplayModeEnabled: Bool
+    public var triggersEnabled: Bool
+    public var remainingMinutes: Int?
+
+    public init(
+        sessionIsActive: Bool,
+        displaySleepAllowed: Bool,
+        closedDisplayModeEnabled: Bool,
+        triggersEnabled: Bool,
+        remainingMinutes: Int? = nil
+    ) {
+        self.sessionIsActive = sessionIsActive
+        self.displaySleepAllowed = displaySleepAllowed
+        self.closedDisplayModeEnabled = closedDisplayModeEnabled
+        self.triggersEnabled = triggersEnabled
+        self.remainingMinutes = remainingMinutes
+    }
+
+    public static let inactive = AmphetamineState(
+        sessionIsActive: false,
+        displaySleepAllowed: true,
+        closedDisplayModeEnabled: false,
+        triggersEnabled: false
+    )
+}
+
+public struct OwnedSessionSignature: Equatable, Codable, Sendable {
+    public var id: UUID
+    public var mode: OperatingMode
+    public var startedAt: Date
+
+    public init(id: UUID = UUID(), mode: OperatingMode, startedAt: Date) {
+        self.id = id
+        self.mode = mode
+        self.startedAt = startedAt
+    }
+}
+
+public struct ModeSnapshot: Equatable, Sendable {
+    public var requestedMode: OperatingMode
+    public var observedState: AmphetamineState?
+    public var ownershipMarker: OwnedSessionSignature?
+    public var health: ControlHealth
+    public var blockingProcesses: [String]
+    public var detail: String?
+
+    public init(
+        requestedMode: OperatingMode,
+        observedState: AmphetamineState?,
+        ownershipMarker: OwnedSessionSignature?,
+        health: ControlHealth,
+        blockingProcesses: [String] = [],
+        detail: String? = nil
+    ) {
+        self.requestedMode = requestedMode
+        self.observedState = observedState
+        self.ownershipMarker = ownershipMarker
+        self.health = health
+        self.blockingProcesses = blockingProcesses
+        self.detail = detail
+    }
+}
+
+public struct SetupReport: Equatable, Sendable {
+    public var amphetamineInstalled: Bool
+    public var supportedVersion: Bool
+    public var automationAuthorized: Bool
+    public var triggersDisabled: Bool
+    public var immediateScreenLock: Bool
+    public var closedDisplayReady: Bool
+    public var detectedVersion: String?
+    public var detail: String?
+
+    public init(
+        amphetamineInstalled: Bool,
+        supportedVersion: Bool,
+        automationAuthorized: Bool,
+        triggersDisabled: Bool,
+        immediateScreenLock: Bool,
+        closedDisplayReady: Bool,
+        detectedVersion: String? = nil,
+        detail: String? = nil
+    ) {
+        self.amphetamineInstalled = amphetamineInstalled
+        self.supportedVersion = supportedVersion
+        self.automationAuthorized = automationAuthorized
+        self.triggersDisabled = triggersDisabled
+        self.immediateScreenLock = immediateScreenLock
+        self.closedDisplayReady = closedDisplayReady
+        self.detectedVersion = detectedVersion
+        self.detail = detail
+    }
+
+    public var isReady: Bool {
+        amphetamineInstalled
+            && supportedVersion
+            && automationAuthorized
+            && triggersDisabled
+            && immediateScreenLock
+            && closedDisplayReady
+    }
+}
+
+public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
+    case amphetamineMissing
+    case unsupportedVersion(found: String?)
+    case automationDenied
+    case triggersEnabled
+    case screenLockNotImmediate
+    case displaySleepBlocked([String])
+    case unownedSessionRequiresConfirmation
+    case invalidTravelDuration(Int)
+    case verificationFailed(String)
+    case backend(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .amphetamineMissing:
+            "Amphetamine 5.3.2 or later is required."
+        case let .unsupportedVersion(found):
+            "Amphetamine 5.3.2 or later is required. Found \(found ?? "an unknown version")."
+        case .automationDenied:
+            "Automation access to Amphetamine is not available."
+        case .triggersEnabled:
+            "Disable Amphetamine Triggers before Caffeine Modes takes control."
+        case .screenLockNotImmediate:
+            "Set Require password after screen saver begins or display is turned off to Immediately."
+        case let .displaySleepBlocked(processes):
+            "Display sleep is blocked by: \(processes.joined(separator: ", "))."
+        case .unownedSessionRequiresConfirmation:
+            "Amphetamine has a session that Caffeine Modes does not own."
+        case let .invalidTravelDuration(minutes):
+            "Travel supports only 30, 60, 90, or 120 minutes. Received \(minutes)."
+        case let .verificationFailed(message), let .backend(message):
+            message
+        }
+    }
+}
