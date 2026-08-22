@@ -152,4 +152,6 @@ Real Night and Travel tests can lock the screen and change power behavior. Run t
 6. Select Off before you put the Mac in a bag.
 7. With the app idle, run `Scripts/verify-performance.sh`.
 
+The performance check measures the app’s accumulated CPU time across a 60-second window. It uses macOS `footprint` for memory charged to the app. It does not use RSS because RSS also counts clean shared system-library pages.
+
 Version 1 uses manual DMG updates.

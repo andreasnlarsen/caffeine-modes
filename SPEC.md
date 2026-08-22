@@ -90,8 +90,8 @@ Scripts/verify-release.sh
 
 ## 7. Non-Functional Requirements
 
-- NFR-001: Idle CPU use is below 0.2% over 60 seconds on the owner’s Mac.
-- NFR-002: Resident memory is below 50 MB during idle menu-bar operation.
+- NFR-001: Idle CPU use is below 0.2% over 60 seconds on the owner’s Mac, measured from the change in accumulated user and system CPU time across the measurement window.
+- NFR-002: Physical memory footprint is below 50 MB during idle menu-bar operation, measured with macOS `footprint`. RSS is not used because it counts clean shared system-library pages as if every page were private to the app.
 - NFR-003: A verified transition finishes within two seconds or reports an explicit error. Every Amphetamine mutation reserves 0.5 seconds of that same deadline for a required verification or recovery read.
 - NFR-004: `CaffeineModesCore` line coverage is at least 90%.
 - NFR-005: The app supports macOS 13 or later on arm64 and x86_64.
@@ -304,4 +304,4 @@ MVP contains REQ-001 through REQ-009 only.
 - Build scope: Build both architectures, create one app bundle, and verify the resulting Mach-O slices.
 - Release scope: Verify Developer ID signature, team ID, hardened runtime, Gatekeeper, notarization, and staple ticket.
 - Live scope: Real mode changes and display sleep are an owner-run acceptance check after the signed build is installed. Automated tests remain read-only.
-- Performance scope: `Scripts/verify-performance.sh` samples CPU and resident memory for 60 seconds. Transition timing is checked during the owner-run acceptance pass.
+- Performance scope: `Scripts/verify-performance.sh` measures accumulated CPU time and samples macOS physical memory footprint for 60 seconds. Transition timing is checked during the owner-run acceptance pass.
