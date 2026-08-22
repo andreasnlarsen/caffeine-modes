@@ -16,7 +16,29 @@ final class SetupAndVersionTests: XCTestCase {
 
         let snapshot = fixture.controller.reconcile()
         XCTAssertEqual(snapshot.health, .amphetamineMissing)
-        XCTAssertFalse(fixture.controller.setupReport().amphetamineInstalled)
+        let report = fixture.controller.setupReport()
+        XCTAssertFalse(report.amphetamineInstalled)
+        XCTAssertEqual(report.automation, .unchecked(reason: nil))
+        XCTAssertEqual(report.triggers, .unchecked(reason: nil))
+        XCTAssertNil(report.amphetamineSessionIsActive)
+        XCTAssertEqual(report.screenLock, .passed)
+        XCTAssertFalse(report.isReady)
+        XCTAssertTrue(fixture.amphetamine.commands.isEmpty)
+    }
+
+    func testUnsupportedVersionReportsWithoutAnAutomationRead() {
+        let fixture = Fixture()
+        fixture.amphetamine.installedVersion = "5.3.1"
+
+        let report = fixture.controller.setupReport()
+
+        XCTAssertTrue(report.amphetamineInstalled)
+        XCTAssertFalse(report.supportedVersion)
+        XCTAssertEqual(report.detectedVersion, "5.3.1")
+        XCTAssertEqual(report.automation, .unchecked(reason: nil))
+        XCTAssertEqual(report.triggers, .unchecked(reason: nil))
+        XCTAssertNil(report.amphetamineSessionIsActive)
+        XCTAssertTrue(fixture.amphetamine.commands.isEmpty)
     }
 
     func testOldAmphetamineIsRejectedBeforeMutation() {
@@ -35,7 +57,34 @@ final class SetupAndVersionTests: XCTestCase {
 
         let snapshot = fixture.controller.reconcile()
         XCTAssertEqual(snapshot.health, .automationDenied)
-        XCTAssertFalse(fixture.controller.setupReport().automationAuthorized)
+        let report = fixture.controller.setupReport()
+        XCTAssertEqual(report.automation, .needsAction)
+        XCTAssertEqual(report.triggers, .unchecked(reason: nil))
+        XCTAssertNil(report.amphetamineSessionIsActive)
+        XCTAssertFalse(report.isReady)
+    }
+
+    func testSetupReportReadsTriggersAndSessionThroughOneAutomationRead() {
+        let fixture = Fixture()
+        fixture.amphetamine.state.triggersEnabled = true
+        fixture.amphetamine.state.sessionIsActive = true
+
+        let report = fixture.controller.setupReport()
+
+        XCTAssertEqual(report.automation, .passed)
+        XCTAssertEqual(report.triggers, .needsAction)
+        XCTAssertEqual(report.amphetamineSessionIsActive, true)
+        XCTAssertEqual(fixture.amphetamine.commands, ["read"])
+    }
+
+    func testSetupReportIsReadyWhenEveryCheckPasses() {
+        let fixture = Fixture()
+
+        let report = fixture.controller.setupReport()
+
+        XCTAssertTrue(report.isReady)
+        XCTAssertEqual(report.detectedVersion, "5.3.2")
+        XCTAssertEqual(report.amphetamineSessionIsActive, false)
     }
 
     func testEnabledTriggersBlockWork() {
@@ -95,8 +144,21 @@ final class SetupAndVersionTests: XCTestCase {
         fixture.screenLock.error = ModeControlError.backend("Unknown output")
 
         let report = fixture.controller.setupReport()
-        XCTAssertFalse(report.immediateScreenLock)
+        XCTAssertEqual(report.screenLock, .unchecked(reason: "Unknown output"))
         XCTAssertFalse(report.isReady)
+    }
+
+    func testSetupReportDistinguishesNonImmediateLockFromUnknown() {
+        let fixture = Fixture()
+        fixture.screenLock.immediate = false
+
+        XCTAssertEqual(fixture.controller.setupReport().screenLock, .needsAction)
+
+        fixture.screenLock.error = ModeControlError.backend("Unknown output")
+        XCTAssertEqual(
+            fixture.controller.setupReport().screenLock,
+            .unchecked(reason: "Unknown output")
+        )
     }
 
     func testSetupChecksUseIndependentDeadlines() {
@@ -107,10 +169,28 @@ final class SetupAndVersionTests: XCTestCase {
 
         let report = fixture.controller.setupReport()
 
-        XCTAssertFalse(report.automationAuthorized)
-        XCTAssertTrue(report.immediateScreenLock)
+        XCTAssertEqual(
+            report.automation,
+            .unchecked(reason: "The operation did not finish before its safety deadline.")
+        )
+        XCTAssertEqual(report.screenLock, .passed)
         XCTAssertEqual(fixture.screenLock.callCount, 1)
         XCTAssertEqual(fixture.screenLock.receivedTimeouts, [2])
+    }
+
+    func testSetupReportRejectsScreenLockResultThatReturnsAfterDeadline() {
+        let fixture = Fixture()
+        fixture.screenLock.onOperation = { _ in
+            fixture.monotonicClock.now += 3
+        }
+
+        let report = fixture.controller.setupReport()
+
+        XCTAssertEqual(
+            report.screenLock,
+            .unchecked(reason: "The operation did not finish before its safety deadline.")
+        )
+        XCTAssertFalse(report.isReady)
     }
 
     func testClosedDisplayReadinessTestUsesABoundedSessionThatExpiresAutomatically() throws {

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="${0:A:h:h}"
-version="${APP_VERSION:-1.0.1}"
+version="${APP_VERSION:-1.0.2}"
 dmg="${1:-$project_root/dist/Caffeine-Modes-$version.dmg}"
 mount_point=""
 

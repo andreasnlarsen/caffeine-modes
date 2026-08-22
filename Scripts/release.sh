@@ -4,13 +4,14 @@ set -euo pipefail
 project_root="${0:A:h:h}"
 identity="${DEVELOPER_ID_APPLICATION:-Developer ID Application: LEAD MEDIA AS (D79LWN85PJ)}"
 profile="${NOTARY_PROFILE:-notchfocus-notary}"
-version="${APP_VERSION:-1.0.1}"
+version="${APP_VERSION:-1.0.2}"
+build_number="${BUILD_NUMBER:-3}"
 dmg="$project_root/dist/Caffeine-Modes-$version.dmg"
 stage="$project_root/dist/dmg-root"
 notary_zip="$project_root/dist/Caffeine-Modes-$version-notarize.zip"
 
 DEVELOPER_ID_APPLICATION="$identity" NOTARY_PROFILE="$profile" "$project_root/Scripts/check-release-prerequisites.sh" >/dev/null
-CODE_SIGN_IDENTITY="$identity" APP_VERSION="$version" "$project_root/Scripts/build-app.sh" >/dev/null
+CODE_SIGN_IDENTITY="$identity" APP_VERSION="$version" BUILD_NUMBER="$build_number" "$project_root/Scripts/build-app.sh" >/dev/null
 
 if [[ -e "$notary_zip" ]]; then
     rm "$notary_zip"

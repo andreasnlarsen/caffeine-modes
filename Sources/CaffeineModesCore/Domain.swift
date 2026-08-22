@@ -146,42 +146,88 @@ public struct ModeSnapshot: Equatable, Sendable {
     }
 }
 
+public struct PowerAssertionReport: Equatable, Sendable {
+    public var displaySleepBlockingProcesses: [String]
+    public var systemSleepBlockingProcesses: [String]
+    public var diskIdleBlockingProcesses: [String]
+
+    public init(
+        displaySleepBlockingProcesses: [String] = [],
+        systemSleepBlockingProcesses: [String] = [],
+        diskIdleBlockingProcesses: [String] = []
+    ) {
+        self.displaySleepBlockingProcesses = displaySleepBlockingProcesses
+        self.systemSleepBlockingProcesses = systemSleepBlockingProcesses
+        self.diskIdleBlockingProcesses = diskIdleBlockingProcesses
+    }
+
+    public static let empty = PowerAssertionReport()
+}
+
+public enum PowerAssertionCategory: Equatable, Sendable {
+    case displaySleep
+    case systemSleep
+    case diskIdle
+}
+
+public enum PowerAssertionClassifier {
+    public static func category(forType type: String) -> PowerAssertionCategory? {
+        switch type {
+        case "PreventUserIdleDisplaySleep", "NoDisplaySleepAssertion":
+            .displaySleep
+        case "PreventUserIdleSystemSleep", "NoIdleSleepAssertion", "PreventSystemSleep",
+             "NetworkClientActive":
+            .systemSleep
+        case "PreventDiskIdle":
+            .diskIdle
+        default:
+            nil
+        }
+    }
+}
+
+public enum SetupCheckState: Equatable, Sendable {
+    case passed
+    case needsAction
+    case unchecked(reason: String?)
+}
+
 public struct SetupReport: Equatable, Sendable {
     public var amphetamineInstalled: Bool
     public var supportedVersion: Bool
-    public var automationAuthorized: Bool
-    public var triggersDisabled: Bool
-    public var immediateScreenLock: Bool
-    public var closedDisplayReady: Bool
     public var detectedVersion: String?
-    public var detail: String?
+    public var automation: SetupCheckState
+    public var triggers: SetupCheckState
+    public var screenLock: SetupCheckState
+    public var closedDisplayReady: Bool
+    public var amphetamineSessionIsActive: Bool?
 
     public init(
         amphetamineInstalled: Bool,
         supportedVersion: Bool,
-        automationAuthorized: Bool,
-        triggersDisabled: Bool,
-        immediateScreenLock: Bool,
-        closedDisplayReady: Bool,
         detectedVersion: String? = nil,
-        detail: String? = nil
+        automation: SetupCheckState,
+        triggers: SetupCheckState,
+        screenLock: SetupCheckState,
+        closedDisplayReady: Bool,
+        amphetamineSessionIsActive: Bool? = nil
     ) {
         self.amphetamineInstalled = amphetamineInstalled
         self.supportedVersion = supportedVersion
-        self.automationAuthorized = automationAuthorized
-        self.triggersDisabled = triggersDisabled
-        self.immediateScreenLock = immediateScreenLock
-        self.closedDisplayReady = closedDisplayReady
         self.detectedVersion = detectedVersion
-        self.detail = detail
+        self.automation = automation
+        self.triggers = triggers
+        self.screenLock = screenLock
+        self.closedDisplayReady = closedDisplayReady
+        self.amphetamineSessionIsActive = amphetamineSessionIsActive
     }
 
     public var isReady: Bool {
         amphetamineInstalled
             && supportedVersion
-            && automationAuthorized
-            && triggersDisabled
-            && immediateScreenLock
+            && automation == .passed
+            && triggers == .passed
+            && screenLock == .passed
             && closedDisplayReady
     }
 }

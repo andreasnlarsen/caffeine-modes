@@ -7,15 +7,15 @@ import IOKit.pwr_mgt
 import ServiceManagement
 
 final class IOKitPowerAssertionInspector: PowerAssertionInspecting {
-    private static let inspections = FreshSingleFlight<[String]> {
+    private static let inspections = FreshSingleFlight<PowerAssertionReport> {
         try inspectSynchronously()
     }
 
-    func displaySleepBlockingProcesses(timeout: TimeInterval) throws -> [String] {
+    func inspect(timeout: TimeInterval) throws -> PowerAssertionReport {
         try Self.inspections.value(timeout: timeout)
     }
 
-    private static func inspectSynchronously() throws -> [String] {
+    private static func inspectSynchronously() throws -> PowerAssertionReport {
         var assertionsByProcess: Unmanaged<CFDictionary>?
         let result = IOPMCopyAssertionsByProcess(&assertionsByProcess)
         guard result == kIOReturnSuccess,
@@ -24,12 +24,10 @@ final class IOKitPowerAssertionInspector: PowerAssertionInspecting {
             throw ModeControlError.backend("macOS did not return its power assertions.")
         }
 
-        let displayTypes: Set<String> = [
-            kIOPMAssertPreventUserIdleDisplaySleep as String,
-            kIOPMAssertionTypeNoDisplaySleep as String
-        ]
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        var names = Set<String>()
+        var displayNames = Set<String>()
+        var systemNames = Set<String>()
+        var diskNames = Set<String>()
 
         for (pidNumber, assertions) in dictionary {
             let pid = pid_t(pidNumber.int32Value)
@@ -38,38 +36,139 @@ final class IOKitPowerAssertionInspector: PowerAssertionInspecting {
             let app = NSRunningApplication(processIdentifier: pid)
             if app?.bundleIdentifier == "com.if.Amphetamine" { continue }
 
-            let blocksDisplay = assertions.contains { assertion in
+            let owner = processName(pid: pid, application: app)
+            let isSystemProcess = isMacOSSystemProcess(pid: pid, application: app)
+            for assertion in assertions {
                 guard let type = assertion[kIOPMAssertionTypeKey as String] as? String,
-                      displayTypes.contains(type)
-                else { return false }
+                      let category = PowerAssertionClassifier.category(forType: type)
+                else { continue }
                 let level = (assertion[kIOPMAssertionLevelKey as String] as? NSNumber)?.uint32Value ?? 0
-                return level == kIOPMAssertionLevelOn
-            }
-
-            if blocksDisplay {
-                names.insert(app?.localizedName ?? "Process \(pid)")
+                guard level == kIOPMAssertionLevelOn else { continue }
+                switch category {
+                case .displaySleep:
+                    displayNames.insert(owner)
+                case .systemSleep:
+                    if !isSystemProcess { systemNames.insert(owner) }
+                case .diskIdle:
+                    if !isSystemProcess { diskNames.insert(owner) }
+                }
             }
         }
-        return names.sorted()
+        return PowerAssertionReport(
+            displaySleepBlockingProcesses: displayNames.sorted(),
+            systemSleepBlockingProcesses: systemNames.sorted(),
+            diskIdleBlockingProcesses: diskNames.sorted()
+        )
+    }
+
+    private static func processName(
+        pid: pid_t,
+        application: NSRunningApplication?
+    ) -> String {
+        if let name = application?.localizedName, !name.isEmpty {
+            return name
+        }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let count = proc_name(pid, &buffer, UInt32(buffer.count))
+        if count > 0 {
+            return buffer.withUnsafeBytes {
+                String(decoding: $0.prefix(Int(count)), as: UTF8.self)
+            }
+        }
+        return "Process \(pid)"
+    }
+
+    private static func isMacOSSystemProcess(
+        pid: pid_t,
+        application: NSRunningApplication?
+    ) -> Bool {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        let count = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        let path: String?
+        if count > 0 {
+            path = buffer.withUnsafeBytes {
+                String(decoding: $0.prefix(Int(count)), as: UTF8.self)
+            }
+        } else {
+            path = nil
+        }
+        return PowerAssertionProcessFilter.hidesFromSystemAndDiskSummary(
+            bundleIdentifier: application?.bundleIdentifier,
+            executablePath: path,
+            isUserFacingApplication: application.map {
+                $0.activationPolicy != .prohibited
+            } ?? false
+        )
     }
 }
 
 final class SystemScreenLockPolicyChecker: ScreenLockPolicyChecking {
+    private enum DeviceGracePeriodReadError: Error {
+        case sourceUnavailable
+    }
+
+    private static let mobileKeyBagPath =
+        "/System/Library/PrivateFrameworks/MobileKeyBag.framework/MobileKeyBag"
+
+    private static let gracePeriodReads = FreshSingleFlight<Int> {
+        try readDeviceGracePeriodSynchronously()
+    }
+
+    private typealias DeviceGracePeriodFunction = @convention(c) (
+        CFDictionary?
+    ) -> Unmanaged<CFDictionary>?
+
     func hasImmediateScreenLock(timeout: TimeInterval) throws -> Bool {
+        guard timeout > 0, timeout.isFinite else {
+            throw ModeControlError.operationTimedOut
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+
+        do {
+            return try ScreenLockStatusParser.isImmediate(
+                deviceGracePeriodSeconds: Self.gracePeriodReads.value(timeout: timeout)
+            )
+        } catch DeviceGracePeriodReadError.sourceUnavailable {
+            // macOS 26 moved this setting to the device grace period. Its
+            // sysadminctl output can disagree with System Settings, so there
+            // is no safe legacy fallback on macOS 26 or later.
+            if #available(macOS 26, *) {
+                throw ModeControlError.backend("macOS could not read the screen-lock grace period.")
+            }
+        }
+
+        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        guard remaining > 0 else { throw ModeControlError.operationTimedOut }
+
         let result = try BoundedProcessRunner.run(
             executable: "/usr/sbin/sysadminctl",
             arguments: ["-screenLock", "status"],
-            timeout: timeout
+            timeout: remaining
         )
         guard result.status == 0 else {
             throw ModeControlError.backend("macOS could not read the screen-lock policy.")
         }
-        let output = result.output
-        let normalized = output.lowercased()
-        guard normalized.contains("screenlock") else {
-            throw ModeControlError.backend("macOS returned an unknown screen-lock status.")
+        return try ScreenLockStatusParser.isImmediate(fromStatusOutput: result.output)
+    }
+
+    private static func readDeviceGracePeriodSynchronously() throws -> Int {
+        guard let library = dlopen(Self.mobileKeyBagPath, RTLD_LAZY | RTLD_LOCAL) else {
+            throw DeviceGracePeriodReadError.sourceUnavailable
         }
-        return normalized.contains("delay is immediate")
+        defer { dlclose(library) }
+
+        guard let symbol = dlsym(library, "MKBDeviceGetGracePeriod") else {
+            throw DeviceGracePeriodReadError.sourceUnavailable
+        }
+        let readGracePeriod = unsafeBitCast(symbol, to: DeviceGracePeriodFunction.self)
+        guard let unmanagedDictionary = readGracePeriod(nil) else {
+            throw ModeControlError.backend("macOS returned no screen-lock grace period.")
+        }
+        let dictionary = unmanagedDictionary.takeRetainedValue() as NSDictionary
+        guard let number = dictionary["GracePeriod"] as? NSNumber else {
+            throw ModeControlError.backend("macOS returned an unknown screen-lock grace period.")
+        }
+        return number.intValue
     }
 }
 

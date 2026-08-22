@@ -28,6 +28,22 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertEqual(fixture.display.sleepCount, 0)
     }
 
+    func testNightDoesNotBlockOnSystemOrDiskAssertions() throws {
+        let fixture = Fixture()
+        fixture.assertions.report = PowerAssertionReport(
+            systemSleepBlockingProcesses: ["ChatGPT", "Claude"],
+            diskIdleBlockingProcesses: ["backupd"]
+        )
+
+        let snapshot = try fixture.controller.transition(
+            to: .night,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .night)
+        XCTAssertEqual(fixture.display.sleepCount, 1)
+    }
+
     func testNightAssertionInspectionUsesTheRemainingTransitionDeadline() {
         let fixture = Fixture()
         fixture.amphetamine.onOperation = { _ in

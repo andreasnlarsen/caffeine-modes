@@ -9,6 +9,11 @@ if [[ $# -eq 0 ]]; then
 fi
 test -d "$bundle"
 
+test -f "$bundle/Contents/Resources/Assets.car"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$bundle/Contents/Info.plist")" = "AppIcon"
+asset_metadata="$(/usr/bin/assetutil -I "$bundle/Contents/Resources/Assets.car")"
+[[ "$asset_metadata" == *'"PixelHeight" : 1024'* ]]
+
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist")" = "com.andreaslar.caffeinemodes"
 test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$bundle/Contents/Info.plist")" = "true"
 test -n "$(/usr/libexec/PlistBuddy -c 'Print :NSAppleEventsUsageDescription' "$bundle/Contents/Info.plist")"

@@ -12,6 +12,10 @@ public final class ModeController: ModeControlling {
     private let readinessTimeout: TimeInterval
     private let mutationRecoveryReserve: TimeInterval = 0.5
     private var lastMutationFailure: String?
+    // Serializes every public entry point so the setup window can run its
+    // checks and the bounded readiness action off the main thread without
+    // racing menu-driven calls. No public method calls another public method.
+    private let entryLock = NSLock()
 
     public init(
         amphetamine: AmphetamineControlling,
@@ -36,7 +40,9 @@ public final class ModeController: ModeControlling {
     }
 
     public func reconcile() -> ModeSnapshot {
-        reconcile(deadline: makeDeadline())
+        entryLock.lock()
+        defer { entryLock.unlock() }
+        return reconcile(deadline: makeDeadline())
     }
 
     private func reconcile(deadline: OperationDeadline) -> ModeSnapshot {
@@ -138,6 +144,8 @@ public final class ModeController: ModeControlling {
         to mode: OperatingMode,
         replacingActiveSession: Bool = false
     ) throws -> ModeSnapshot {
+        entryLock.lock()
+        defer { entryLock.unlock() }
         let deadline = makeDeadline()
         try validate(mode)
         let before = reconcile(deadline: deadline)
@@ -298,47 +306,56 @@ public final class ModeController: ModeControlling {
     }
 
     public func setupReport() -> SetupReport {
+        entryLock.lock()
+        defer { entryLock.unlock() }
         let installed = amphetamine.isInstalled
-        let supported = VersionSupport.isSupported(amphetamine.installedVersion)
-        var authorized = false
-        var triggersDisabled = false
-        var immediateLock = false
-        var detail: String?
+        let version = amphetamine.installedVersion
+        let supported = VersionSupport.isSupported(version)
+
+        var automation = SetupCheckState.unchecked(reason: nil)
+        var triggers = SetupCheckState.unchecked(reason: nil)
+        var sessionIsActive: Bool?
 
         if installed, supported {
             do {
-                let amphetamineDeadline = makeDeadline()
-                let state = try readAmphetamineState(deadline: amphetamineDeadline)
-                authorized = true
-                triggersDisabled = !state.triggersEnabled
+                let state = try readAmphetamineState(deadline: makeDeadline())
+                automation = .passed
+                triggers = state.triggersEnabled ? .needsAction : .passed
+                sessionIsActive = state.sessionIsActive
+            } catch ModeControlError.automationDenied {
+                automation = .needsAction
             } catch {
-                detail = error.localizedDescription
+                automation = .unchecked(reason: error.localizedDescription)
             }
         }
 
+        var screenLockState = SetupCheckState.unchecked(reason: nil)
         do {
             let screenLockDeadline = makeDeadline()
-            immediateLock = try screenLock.hasImmediateScreenLock(
+            let immediate = try screenLock.hasImmediateScreenLock(
                 timeout: try remainingTime(screenLockDeadline)
             )
             try checkDeadline(screenLockDeadline)
+            screenLockState = immediate ? .passed : .needsAction
         } catch {
-            detail = detail ?? error.localizedDescription
+            screenLockState = .unchecked(reason: error.localizedDescription)
         }
 
         return SetupReport(
             amphetamineInstalled: installed,
             supportedVersion: supported,
-            automationAuthorized: authorized,
-            triggersDisabled: triggersDisabled,
-            immediateScreenLock: immediateLock,
+            detectedVersion: version,
+            automation: automation,
+            triggers: triggers,
+            screenLock: screenLockState,
             closedDisplayReady: store.closedDisplayReadinessPassed,
-            detectedVersion: amphetamine.installedVersion,
-            detail: detail
+            amphetamineSessionIsActive: sessionIsActive
         )
     }
 
     public func disableTriggers() throws {
+        entryLock.lock()
+        defer { entryLock.unlock() }
         let deadline = makeDeadline()
         try requireAmphetamine()
         do {
@@ -358,6 +375,8 @@ public final class ModeController: ModeControlling {
     public func runClosedDisplayReadinessTest(
         authorizingSessionReplacement: Bool
     ) throws {
+        entryLock.lock()
+        defer { entryLock.unlock() }
         let preflightDeadline = makeDeadline()
         let preflightState = try preflight(
             .work,
@@ -431,6 +450,8 @@ public final class ModeController: ModeControlling {
     }
 
     public func hasActiveSessionForQuit() throws -> Bool {
+        entryLock.lock()
+        defer { entryLock.unlock() }
         let deadline = makeDeadline()
         guard amphetamine.isInstalled else {
             store.ownedSessionSignature = nil
@@ -450,6 +471,8 @@ public final class ModeController: ModeControlling {
     }
 
     public func endActiveSessionForQuit() throws {
+        entryLock.lock()
+        defer { entryLock.unlock() }
         let deadline = makeDeadline()
         try requireAmphetamine()
         let before = try readAmphetamineState(deadline: deadline)
@@ -545,9 +568,8 @@ public final class ModeController: ModeControlling {
             if requireClosedDisplayReadiness, !store.closedDisplayReadinessPassed {
                 throw ModeControlError.verificationFailed("Complete the closed-display readiness test first.")
             }
-            let blockers = try assertions.displaySleepBlockingProcesses(
-                timeout: try remainingTime(deadline)
-            )
+            let blockers = try assertions.inspect(timeout: try remainingTime(deadline))
+                .displaySleepBlockingProcesses
             try checkDeadline(deadline)
             guard blockers.isEmpty else {
                 throw ModeControlError.displaySleepBlocked(blockers)

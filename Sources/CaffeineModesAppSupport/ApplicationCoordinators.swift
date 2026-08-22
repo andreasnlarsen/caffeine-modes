@@ -223,26 +223,126 @@ public final class ApplicationTerminationRouter {
 
 @MainActor
 public final class ModeSelectionCoordinator {
-    private let transition: (OperatingMode, Bool) throws -> ModeSnapshot
+    private let transition: (OperatingMode, Bool) async throws -> ModeSnapshot
     private let confirm: (ModeSelectionConfirmation) -> Bool
 
     public init(
-        transition: @escaping (OperatingMode, Bool) throws -> ModeSnapshot,
+        transition: @escaping (OperatingMode, Bool) async throws -> ModeSnapshot,
         confirm: @escaping (ModeSelectionConfirmation) -> Bool
     ) {
         self.transition = transition
         self.confirm = confirm
     }
 
-    public func select(_ mode: OperatingMode) throws -> ModeSnapshot? {
+    public func select(_ mode: OperatingMode) async throws -> ModeSnapshot? {
         do {
-            return try transition(mode, false)
+            return try await transition(mode, false)
         } catch ModeControlError.activeSessionRequiresConfirmation {
             guard confirm(.replaceActiveSession(mode)) else { return nil }
-            return try transition(mode, true)
+            return try await transition(mode, true)
         } catch ModeControlError.sessionStartRequiresConfirmation {
             guard confirm(.start(mode)) else { return nil }
-            return try transition(mode, true)
+            return try await transition(mode, true)
         }
+    }
+}
+
+public struct MenuActivityPolicy: Equatable, Sendable {
+    public enum MenuOpenBehavior: Equatable, Sendable {
+        case refreshStatus
+        case showSetupBusy
+        case preserveCurrentStatus
+    }
+
+    public let setupIsBusy: Bool
+    public let transitionIsInProgress: Bool
+    public let refreshIsInProgress: Bool
+
+    public init(
+        setupIsBusy: Bool,
+        transitionIsInProgress: Bool,
+        refreshIsInProgress: Bool
+    ) {
+        self.setupIsBusy = setupIsBusy
+        self.transitionIsInProgress = transitionIsInProgress
+        self.refreshIsInProgress = refreshIsInProgress
+    }
+
+    public var modesAreEnabled: Bool {
+        !setupIsBusy && !transitionIsInProgress
+    }
+
+    public var quitIsEnabled: Bool {
+        modesAreEnabled && !refreshIsInProgress
+    }
+
+    public var hasControllerWorkInProgress: Bool {
+        setupIsBusy || transitionIsInProgress || refreshIsInProgress
+    }
+
+    public var acceptsRefreshResults: Bool {
+        !setupIsBusy && !transitionIsInProgress
+    }
+
+    public var menuOpenBehavior: MenuOpenBehavior {
+        if setupIsBusy { return .showSetupBusy }
+        if transitionIsInProgress { return .preserveCurrentStatus }
+        return .refreshStatus
+    }
+}
+
+public struct RefreshRequestCoordinator: Sendable {
+    public private(set) var isInProgress = false
+    private var retryIsPending = false
+
+    public init() {}
+
+    public mutating func request(blocked: Bool) -> Bool {
+        guard !blocked, !isInProgress else {
+            retryIsPending = true
+            return false
+        }
+        retryIsPending = false
+        isInProgress = true
+        return true
+    }
+
+    public mutating func finish() -> Bool {
+        isInProgress = false
+        let shouldRetry = retryIsPending
+        retryIsPending = false
+        return shouldRetry
+    }
+}
+
+public struct SetupCompletionCoordinator: Sendable {
+    private var setupIsComplete = false
+    private var completionWasDelivered = false
+    private var completionIsPendingForRefresh = false
+
+    public init() {}
+
+    public mutating func update(isComplete: Bool) {
+        setupIsComplete = isComplete
+    }
+
+    public mutating func beginRefresh() {
+        setupIsComplete = false
+    }
+
+    public mutating func noteCloseDuringRefresh() {
+        completionIsPendingForRefresh = true
+    }
+
+    public mutating func consumeCompletionAfterRefresh() -> Bool {
+        guard completionIsPendingForRefresh else { return false }
+        completionIsPendingForRefresh = false
+        return consumeCompletionForClose()
+    }
+
+    public mutating func consumeCompletionForClose() -> Bool {
+        guard setupIsComplete, !completionWasDelivered else { return false }
+        completionWasDelivered = true
+        return true
     }
 }

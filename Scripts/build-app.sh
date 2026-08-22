@@ -6,8 +6,8 @@ app_name="Caffeine Modes"
 bundle="$project_root/build/$app_name.app"
 contents="$bundle/Contents"
 identity="${CODE_SIGN_IDENTITY:--}"
-app_version="${APP_VERSION:-1.0.1}"
-build_number="${BUILD_NUMBER:-2}"
+app_version="${APP_VERSION:-1.0.2}"
+build_number="${BUILD_NUMBER:-3}"
 
 mkdir -p "$project_root/build" "$project_root/dist"
 if [[ -e "$bundle" ]]; then
@@ -36,6 +36,8 @@ plutil -replace CFBundleVersion -string "$build_number" "$contents/Info.plist"
 
 "$project_root/Scripts/generate-icon.sh" >/dev/null
 cp "$project_root/dist/AppIcon.icns" "$contents/Resources/AppIcon.icns"
+cp "$project_root/dist/AppIcon.compiled/Assets.car" "$contents/Resources/Assets.car"
+plutil -replace CFBundleIconName -string AppIcon "$contents/Info.plist"
 
 sign_arguments=(--force --deep --options runtime --entitlements "$project_root/Resources/CaffeineModes.entitlements" --sign "$identity")
 if [[ "$identity" != "-" ]]; then

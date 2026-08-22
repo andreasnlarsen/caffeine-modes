@@ -5,7 +5,107 @@ import XCTest
 
 @MainActor
 final class ApplicationCoordinatorTests: XCTestCase {
-    func testStartConfirmationCancelDoesNotRetryTransition() throws {
+    func testMainThreadExecutorRunsInlineOnMainThread() {
+        XCTAssertTrue(Thread.isMainThread)
+        XCTAssertTrue(MainThreadExecutor.run { Thread.isMainThread })
+    }
+
+    func testMainThreadExecutorMarshalsWorkerOperationToMainThread() async {
+        let ranOnMainThread = await Task.detached {
+            MainThreadExecutor.run { Thread.isMainThread }
+        }.value
+
+        XCTAssertTrue(ranOnMainThread)
+    }
+
+    func testCompletedSetupCloseDeliversOnboardingOnce() {
+        var coordinator = SetupCompletionCoordinator()
+        coordinator.update(isComplete: true)
+
+        XCTAssertTrue(coordinator.consumeCompletionForClose())
+        XCTAssertFalse(coordinator.consumeCompletionForClose())
+    }
+
+    func testIncompleteSetupCloseDoesNotDeliverOnboarding() {
+        var coordinator = SetupCompletionCoordinator()
+        coordinator.update(isComplete: false)
+
+        XCTAssertFalse(coordinator.consumeCompletionForClose())
+    }
+
+    func testSetupRefreshInvalidatesEarlierCompletionUntilFreshResultArrives() {
+        var coordinator = SetupCompletionCoordinator()
+        coordinator.update(isComplete: true)
+
+        coordinator.beginRefresh()
+        coordinator.noteCloseDuringRefresh()
+        XCTAssertFalse(coordinator.consumeCompletionForClose())
+
+        coordinator.update(isComplete: true)
+        XCTAssertTrue(coordinator.consumeCompletionAfterRefresh())
+        XCTAssertFalse(coordinator.consumeCompletionAfterRefresh())
+    }
+
+    func testIncompleteResultClearsPendingSetupCloseWithoutLaterDelivery() {
+        var coordinator = SetupCompletionCoordinator()
+        coordinator.beginRefresh()
+        coordinator.noteCloseDuringRefresh()
+
+        coordinator.update(isComplete: false)
+        XCTAssertFalse(coordinator.consumeCompletionAfterRefresh())
+
+        coordinator.update(isComplete: true)
+        XCTAssertFalse(coordinator.consumeCompletionAfterRefresh())
+    }
+
+    func testStatusRefreshDisablesQuitButKeepsModeSelectionAvailable() {
+        let activity = MenuActivityPolicy(
+            setupIsBusy: false,
+            transitionIsInProgress: false,
+            refreshIsInProgress: true
+        )
+
+        XCTAssertTrue(activity.modesAreEnabled)
+        XCTAssertFalse(activity.quitIsEnabled)
+        XCTAssertTrue(activity.hasControllerWorkInProgress)
+    }
+
+    func testTransitionRejectsOlderRefreshResultsAndPreservesItsMenuStatus() {
+        let activity = MenuActivityPolicy(
+            setupIsBusy: false,
+            transitionIsInProgress: true,
+            refreshIsInProgress: true
+        )
+
+        XCTAssertFalse(activity.acceptsRefreshResults)
+        XCTAssertEqual(activity.menuOpenBehavior, .preserveCurrentStatus)
+    }
+
+    func testSetupBusyUsesItsOwnMenuStatus() {
+        let activity = MenuActivityPolicy(
+            setupIsBusy: true,
+            transitionIsInProgress: false,
+            refreshIsInProgress: false
+        )
+
+        XCTAssertEqual(activity.menuOpenBehavior, .showSetupBusy)
+        XCTAssertFalse(activity.acceptsRefreshResults)
+    }
+
+    func testDeferredStatusRefreshRetriesAfterBusyWorkFinishes() {
+        var coordinator = RefreshRequestCoordinator()
+
+        XCTAssertFalse(coordinator.request(blocked: true))
+        XCTAssertTrue(coordinator.request(blocked: false))
+        XCTAssertTrue(coordinator.isInProgress)
+        XCTAssertFalse(coordinator.finish())
+
+        XCTAssertTrue(coordinator.request(blocked: false))
+        XCTAssertFalse(coordinator.request(blocked: false))
+        XCTAssertTrue(coordinator.finish())
+    }
+
+    func testStartConfirmationCancelDoesNotRetryTransition() async throws {
         var authorizations: [Bool] = []
         var confirmations: [ModeSelectionConfirmation] = []
         let coordinator = ModeSelectionCoordinator(
@@ -19,12 +119,13 @@ final class ApplicationCoordinatorTests: XCTestCase {
             }
         )
 
-        XCTAssertNil(try coordinator.select(.work))
+        let result = try await coordinator.select(.work)
+        XCTAssertNil(result)
         XCTAssertEqual(authorizations, [false])
         XCTAssertEqual(confirmations, [.start(.work)])
     }
 
-    func testStartConfirmationAcceptRetriesWithAuthorization() throws {
+    func testStartConfirmationAcceptRetriesWithAuthorization() async throws {
         var authorizations: [Bool] = []
         var confirmations: [ModeSelectionConfirmation] = []
         let coordinator = ModeSelectionCoordinator(
@@ -41,12 +142,13 @@ final class ApplicationCoordinatorTests: XCTestCase {
             }
         )
 
-        XCTAssertEqual(try coordinator.select(.night), Self.snapshot(.night))
+        let result = try await coordinator.select(.night)
+        XCTAssertEqual(result, Self.snapshot(.night))
         XCTAssertEqual(authorizations, [false, true])
         XCTAssertEqual(confirmations, [.start(.night)])
     }
 
-    func testActiveSessionReplacementCancelDoesNotRetryTransition() throws {
+    func testActiveSessionReplacementCancelDoesNotRetryTransition() async throws {
         var authorizations: [Bool] = []
         let coordinator = ModeSelectionCoordinator(
             transition: { _, authorization in
@@ -59,11 +161,12 @@ final class ApplicationCoordinatorTests: XCTestCase {
             }
         )
 
-        XCTAssertNil(try coordinator.select(.off))
+        let result = try await coordinator.select(.off)
+        XCTAssertNil(result)
         XCTAssertEqual(authorizations, [false])
     }
 
-    func testActiveSessionReplacementAcceptRetriesWithAuthorization() throws {
+    func testActiveSessionReplacementAcceptRetriesWithAuthorization() async throws {
         var authorizations: [Bool] = []
         let coordinator = ModeSelectionCoordinator(
             transition: { mode, authorization in
@@ -79,7 +182,8 @@ final class ApplicationCoordinatorTests: XCTestCase {
             }
         )
 
-        XCTAssertEqual(try coordinator.select(.work), Self.snapshot(.work))
+        let result = try await coordinator.select(.work)
+        XCTAssertEqual(result, Self.snapshot(.work))
         XCTAssertEqual(authorizations, [false, true])
     }
 
@@ -122,7 +226,7 @@ final class ApplicationCoordinatorTests: XCTestCase {
         XCTAssertEqual(confirmation.confirmButtonTitle, "Start Travel for 30 Minutes")
     }
 
-    func testUnexpectedModeErrorDoesNotAskForConfirmation() {
+    func testUnexpectedModeErrorDoesNotAskForConfirmation() async {
         var confirmationCount = 0
         let coordinator = ModeSelectionCoordinator(
             transition: { _, _ in throw ModeControlError.automationDenied },
@@ -132,7 +236,10 @@ final class ApplicationCoordinatorTests: XCTestCase {
             }
         )
 
-        XCTAssertThrowsError(try coordinator.select(.work)) { error in
+        do {
+            _ = try await coordinator.select(.work)
+            XCTFail("Expected Automation denial")
+        } catch {
             XCTAssertEqual(error as? ModeControlError, .automationDenied)
         }
         XCTAssertEqual(confirmationCount, 0)

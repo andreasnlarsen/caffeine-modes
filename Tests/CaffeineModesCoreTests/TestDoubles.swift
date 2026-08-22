@@ -102,18 +102,22 @@ final class FakeAmphetamine: AmphetamineControlling {
 }
 
 final class FakeAssertions: PowerAssertionInspecting {
-    var blockers: [String] = []
+    var report = PowerAssertionReport.empty
+    var blockers: [String] {
+        get { report.displaySleepBlockingProcesses }
+        set { report.displaySleepBlockingProcesses = newValue }
+    }
     var callCount = 0
     var receivedTimeouts: [TimeInterval] = []
     var onOperation: ((TimeInterval) -> Void)?
     var error: Error?
 
-    func displaySleepBlockingProcesses(timeout: TimeInterval) throws -> [String] {
+    func inspect(timeout: TimeInterval) throws -> PowerAssertionReport {
         callCount += 1
         receivedTimeouts.append(timeout)
         onOperation?(timeout)
         if let error { throw error }
-        return blockers
+        return report
     }
 }
 

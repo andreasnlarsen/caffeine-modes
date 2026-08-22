@@ -5,7 +5,7 @@ import Foundation
 
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
-    private let controller: ModeControlling
+    private let controllerRunner: MenuControllerRunner
     private let store: ModeStateStoring
     private let launchManager: LaunchAtLoginManaging
     private let requestQuit: () -> Void
@@ -14,12 +14,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private let statusLine = NSMenuItem(title: "Checking status…", action: nil, keyEquivalent: "")
     private let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+    private let quitItem = NSMenuItem(title: "Quit Caffeine Modes", action: #selector(quitApp), keyEquivalent: "q")
     private var modeItems: [OperatingModeKey: NSMenuItem] = [:]
     private var snapshot = ModeSnapshot(requestedMode: .off, observedState: nil, ownershipMarker: nil, health: .setupIncomplete)
+    private var powerReport: PowerAssertionReport?
+    private var refreshCoordinator = RefreshRequestCoordinator()
+    private var transitionInProgress = false
     private var timer: Timer?
     private lazy var modeSelectionCoordinator = ModeSelectionCoordinator(
-        transition: { [controller] mode, authorization in
-            try controller.transition(to: mode, replacingActiveSession: authorization)
+        transition: { [controllerRunner] mode, authorization in
+            try await controllerRunner.transition(
+                to: mode,
+                authorizingReplacement: authorization
+            )
         },
         confirm: { [weak self] reason in
             self?.confirmModeSelection(reason) ?? false
@@ -28,17 +35,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     init(
         controller: ModeControlling,
+        assertions: PowerAssertionInspecting,
         store: ModeStateStoring,
         launchManager: LaunchAtLoginManaging,
         requestQuit: @escaping () -> Void
     ) {
-        self.controller = controller
+        self.controllerRunner = MenuControllerRunner(
+            controller: controller,
+            assertions: assertions
+        )
         self.store = store
         self.launchManager = launchManager
         self.requestQuit = requestQuit
         self.setupWindow = SetupWindowController(controller: controller)
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
+        setupWindow.onSetupCompleted = { [weak self] in
+            self?.showLaunchAtLoginPromptIfNeeded()
+        }
+        setupWindow.onWorkFinished = { [weak self] in
+            self?.refresh()
+        }
         configureMenu()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -47,10 +64,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func showSetupIfNeeded() {
-        if !controller.setupReport().isReady {
-            setupWindow.showWindow(nil)
+        setupWindow.checkAndShowIfNeeded { [weak self] isReady in
+            guard let self else { return }
+            if isReady {
+                self.showLaunchAtLoginPromptIfNeeded()
+            } else {
+                self.refresh()
+            }
         }
+    }
 
+    private func showLaunchAtLoginPromptIfNeeded() {
         guard !store.launchAtLoginPromptWasShown else { return }
         store.launchAtLoginPromptWasShown = true
         let alert = NSAlert()
@@ -101,9 +125,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(about)
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit Caffeine Modes", action: #selector(quitApp), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
+        quitItem.target = self
+        menu.addItem(quitItem)
         menu.delegate = self
         statusItem.menu = menu
     }
@@ -116,7 +139,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        refresh()
+        updateMenuAvailability()
+        switch menuActivity.menuOpenBehavior {
+        case .showSetupBusy:
+            statusLine.title = "Setup check in progress…"
+        case .preserveCurrentStatus:
+            break
+        case .refreshStatus:
+            refresh()
+        }
     }
 
     @objc private func selectOff() { select(.off) }
@@ -128,14 +159,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func select(_ mode: OperatingMode) {
-        do {
-            if let selected = try modeSelectionCoordinator.select(mode) {
-                snapshot = selected
+        guard !setupWindow.isBusy, !transitionInProgress else { return }
+        transitionInProgress = true
+        statusLine.title = "Checking \(mode.displayName)…"
+        updateMenuAvailability()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                if let selected = try await self.modeSelectionCoordinator.select(mode) {
+                    self.snapshot = selected
+                }
+            } catch {
+                self.showError(error)
             }
-        } catch {
-            showError(error)
+            self.transitionInProgress = false
+            self.updateMenuAvailability()
+            self.refresh()
         }
-        refresh()
     }
 
     private func confirmModeSelection(_ reason: ModeSelectionConfirmation) -> Bool {
@@ -179,6 +219,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
+    var hasControllerWorkInProgress: Bool {
+        menuActivity.hasControllerWorkInProgress
+    }
+
+    func presentBusyQuitMessage() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Caffeine Modes Is Busy"
+        alert.informativeText = "Wait for the current status or setup check to finish before you quit Caffeine Modes."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     func confirmQuitWithActiveSession() -> ActiveSessionQuitChoice {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -209,10 +262,41 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func refresh() {
-        snapshot = controller.reconcile()
-        updateCheckmarks()
-        updateStatus()
-        launchItem.state = launchManager.isEnabled ? .on : .off
+        let blocked = setupWindow.isBusy || transitionInProgress
+        guard refreshCoordinator.request(blocked: blocked) else {
+            updateMenuAvailability()
+            return
+        }
+        updateMenuAvailability()
+        controllerRunner.fetchStatus { [weak self] snapshot, report in
+            guard let self else { return }
+            let shouldRetry = self.refreshCoordinator.finish()
+            if self.menuActivity.acceptsRefreshResults {
+                self.snapshot = snapshot
+                self.powerReport = report
+                self.updateCheckmarks()
+                self.updateStatus()
+            }
+            self.launchItem.state = self.launchManager.isEnabled ? .on : .off
+            self.updateMenuAvailability()
+            if shouldRetry {
+                self.refresh()
+            }
+        }
+    }
+
+    private func updateMenuAvailability() {
+        let activity = menuActivity
+        modeItems.values.forEach { $0.isEnabled = activity.modesAreEnabled }
+        quitItem.isEnabled = activity.quitIsEnabled
+    }
+
+    private var menuActivity: MenuActivityPolicy {
+        MenuActivityPolicy(
+            setupIsBusy: setupWindow.isBusy,
+            transitionIsInProgress: transitionInProgress,
+            refreshIsInProgress: refreshCoordinator.isInProgress
+        )
     }
 
     private func updateCheckmarks() {
@@ -223,48 +307,104 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func updateStatus() {
         let title: String
+        let toolTip: String
         let symbol: String
         if snapshot.health != .ready && snapshot.requestedMode != .custom {
             title = snapshot.detail ?? "Setup needs attention"
+            toolTip = "Caffeine Modes — \(title)"
+            symbol = "exclamationmark.triangle.fill"
+        } else if snapshot.requestedMode == .custom {
+            title = snapshot.detail ?? "Custom Amphetamine session"
+            toolTip = "Caffeine Modes — \(title)"
             symbol = "exclamationmark.triangle.fill"
         } else {
-            switch snapshot.requestedMode {
-            case .off:
-                title = externalBlockerSummary(prefix: "Off")
-                symbol = "cup.and.saucer"
-            case .work:
-                title = "Work · Mac and displays stay awake"
-                symbol = "cup.and.saucer.fill"
-            case .night:
-                title = "Night · Display asleep, Mac awake"
-                symbol = "moon.fill"
-            case let .travel(_, expiresAt):
-                let remaining = max(0, Int(expiresAt.timeIntervalSinceNow.rounded(.up)))
-                title = "Travel · \(TravelCountdownFormatter.string(seconds: remaining)) remaining"
-                symbol = "car.fill"
-            case .custom:
-                title = snapshot.detail ?? "Custom Amphetamine session"
+            let travelSeconds: Int?
+            if case let .travel(_, expiresAt) = snapshot.requestedMode {
+                travelSeconds = max(0, Int(expiresAt.timeIntervalSinceNow.rounded(.up)))
+            } else {
+                travelSeconds = nil
+            }
+            let presentation = PowerStatusPresentation.make(
+                mode: snapshot.requestedMode,
+                report: powerReport,
+                travelSecondsRemaining: travelSeconds
+            )
+            title = presentation.statusLine
+            toolTip = presentation.toolTip
+            if presentation.hasUnexpectedDisplayBlocker || presentation.hasInspectionError {
                 symbol = "exclamationmark.triangle.fill"
+            } else {
+                switch snapshot.requestedMode {
+                case .off: symbol = "cup.and.saucer"
+                case .work: symbol = "cup.and.saucer.fill"
+                case .night: symbol = "moon.fill"
+                case .travel: symbol = "car.fill"
+                case .custom: symbol = "exclamationmark.triangle.fill"
+                }
             }
         }
 
         statusLine.title = title
-        statusItem.button?.toolTip = "Caffeine Modes — \(title)"
+        statusItem.button?.toolTip = toolTip
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         image?.isTemplate = true
         statusItem.button?.image = image
-    }
-
-    private func externalBlockerSummary(prefix: String) -> String {
-        let blockers = (try? IOKitPowerAssertionInspector().displaySleepBlockingProcesses(timeout: 0.25)) ?? []
-        guard !blockers.isEmpty else { return prefix }
-        return "\(prefix) · Display held awake by \(blockers.joined(separator: ", "))"
     }
 
     private func showError(_ error: Error) {
         let alert = NSAlert(error: error)
         alert.alertStyle = .warning
         alert.runModal()
+    }
+}
+
+private final class MenuControllerRunner: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "com.andreaslar.caffeinemodes.menu-controller",
+        qos: .userInitiated
+    )
+    private let controller: ModeControlling
+    private let assertions: PowerAssertionInspecting
+
+    init(controller: ModeControlling, assertions: PowerAssertionInspecting) {
+        self.controller = controller
+        self.assertions = assertions
+    }
+
+    func fetchStatus(
+        _ completion: @escaping @MainActor (ModeSnapshot, PowerAssertionReport?) -> Void
+    ) {
+        queue.async {
+            let snapshot = self.controller.reconcile()
+            let report = try? self.assertions.inspect(timeout: 0.25)
+            Self.deliver { completion(snapshot, report) }
+        }
+    }
+
+    func transition(
+        to mode: OperatingMode,
+        authorizingReplacement: Bool
+    ) async throws -> ModeSnapshot {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    continuation.resume(
+                        returning: try self.controller.transition(
+                            to: mode,
+                            replacingActiveSession: authorizingReplacement
+                        )
+                    )
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func deliver(_ update: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated(update)
+        }
     }
 }
 

@@ -13,9 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         let store = UserDefaultsModeStore()
+        let assertions = IOKitPowerAssertionInspector()
         let controller = ModeController(
             amphetamine: AmphetamineClient(),
-            assertions: IOKitPowerAssertionInspector(),
+            assertions: assertions,
             screenLock: SystemScreenLockPolicyChecker(),
             display: PMSetDisplaySleeper(),
             store: store
@@ -34,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let menuBarController = MenuBarController(
             controller: controller,
+            assertions: assertions,
             store: store,
             launchManager: LaunchAtLoginManager(),
             requestQuit: { NSApplication.shared.terminate(nil) }
@@ -53,8 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let terminationRouter else { return .terminateNow }
 
+        let request = currentTerminationRequest()
+        if request == .user, menuBarController?.hasControllerWorkInProgress == true {
+            menuBarController?.presentBusyQuitMessage()
+            return .terminateCancel
+        }
+
         do {
-            switch try terminationRouter.decision(for: currentTerminationRequest()) {
+            switch try terminationRouter.decision(for: request) {
             case .terminateNow: return .terminateNow
             case .terminateCancel: return .terminateCancel
             }

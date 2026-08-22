@@ -2,7 +2,7 @@
 
 Status: Active implementation contract
 
-Version: 1.0.1
+Version: 1.0.2
 
 Last updated: 2026-08-22
 
@@ -34,6 +34,7 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 - As a user, I must confirm before Caffeine Modes ends or replaces any active Amphetamine session.
 - As a user, I must confirm every Work, Night, or Travel start. This confirmation also authorizes replacement if another Amphetamine session appears after the preflight check.
 - As a user, I see the process name when another app blocks display sleep.
+- As a user, I can tell whether a process blocks display sleep, automatic system sleep, or disk idle sleep. These facts are never reduced to the phrase "Mac held awake."
 - As a user, I can verify setup and control Launch at Login from the menu.
 - As a user, Quit lets me end the active session or leave it running. If I choose to end it, the app stays open when Off cannot be verified.
 - As a user, logout, restart, and shutdown do not wait for a Caffeine Modes prompt or Amphetamine command.
@@ -45,10 +46,10 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 - REQ-001 — Repository and artifacts. Acceptance: The root contains one active `SPEC.md`, `DESIGN_SYSTEM.md`, `README.md`, SwiftPM core, app-support, app, and test targets, release scripts, and a git repository on `main`.
 - REQ-002 — Guided setup. Acceptance: Setup reports Amphetamine presence and version, Automation access, Trigger state, immediate screen-lock policy, and closed-display readiness as separate deterministic results. The Amphetamine read and screen-lock query each use an independent bounded deadline. The one-minute readiness test expires through Amphetamine and is never ended automatically by Caffeine Modes. Its stored expiry is anchored to Amphetamine's freshly observed remaining timer after the start command returns.
 - REQ-003 — Mode reconciliation. Acceptance: Off, Work, Night, Travel, and Custom are mutually exclusive projections of Amphetamine state plus one stored diagnostic session signature.
-- REQ-004 — Night transition. Acceptance: Night blocks named external display assertions before mutation, applies its Amphetamine policy, verifies that policy, and only then requests display sleep.
+- REQ-004 — Night transition. Acceptance: Night blocks named external display assertions before mutation, applies its Amphetamine policy, verifies that policy, and only then requests display sleep. Automatic-system-sleep and disk-idle assertions remain observational and never block Night or Travel.
 - REQ-005 — Travel transition. Acceptance: Travel accepts only 30, 60, 90, or 120 minutes, stores its expiry, uses an Amphetamine timed session, and reconciles to Off when that session expires.
 - REQ-006 — Session safety and failure. Acceptance: A stored signature never authorizes a destructive action. Every Work, Night, or Travel start and active-session replacement needs an explicit user choice that names the target mode and the selected Travel duration when applicable. Every active-session end needs an explicit user choice that names Off. The destructive Quit choice is named Turn Off and Quit. App-layer tests execute every mode-start, replacement, external user Quit, and system Quit route. If Quit cannot inspect Amphetamine, it offers only Leave Amphetamine Unchanged and Quit or Cancel; Turn Off is unavailable. User Quit never reads or mutates an unsupported Amphetamine version. Only verified logout, restart, or shutdown signals bypass reads, prompts, and mutation. Relaunch, partial failure, and user Quit never silently end an active session, and an unverifiable session mutation appears as Custom with backend mismatch health.
-- REQ-007 — Native menu app. Acceptance: The `NSStatusItem` menu, template icon, setup access, countdown, actual mode checkmark, and `SMAppService.mainApp` Launch at Login toggle reflect observed state.
+- REQ-007 — Native menu app. Acceptance: The `NSStatusItem` menu, template icon, setup access, countdown, actual mode checkmark, and `SMAppService.mainApp` Launch at Login toggle reflect observed state. Off reports external display and automatic-system-sleep blockers as distinct facts. Disk-idle blockers appear only in the tooltip. Setup and menu orchestration run on serial worker queues. Only the bounded `NSAppleScript` boundary returns to the main thread, as required by Apple.
 - REQ-008 — Boundary limits. Acceptance: The repository contains no root helper, Accessibility request, direct Amphetamine preference edit, `osascript` process, `pmset disablesleep`, or unrelated external-process termination path.
 - REQ-009 — Release artifact. Acceptance: The DMG contains an arm64 and x86_64 app with hardened runtime, LEAD MEDIA AS Developer ID signing, accepted notarization, a staple ticket, and passing Gatekeeper assessment.
 
@@ -98,6 +99,7 @@ Scripts/verify-release.sh
 - NFR-007: No user data leaves the Mac. Version 1 makes no network request.
 - NFR-008: A timed child process reserves cleanup time inside its original deadline. Termination and kill cleanup cannot extend that deadline.
 - NFR-009: At most one IOKit assertion inspection can be in flight. A caller joins an existing inspection within its own deadline. If that inspection finishes in time, the joined caller then obtains a fresh snapshot within the same deadline.
+- NFR-010: Setup checks, status reads, and mode-transition orchestration execute on serial worker queues. The bounded `NSAppleScript` creation, execution, and reply parsing execute on the main thread because Apple marks that class main-thread-only. No AppleScript descriptor crosses the thread boundary. IOKit inspection, device-policy reads, and fixed process invocations remain off the main thread.
 
 ## 8. Constraints
 
@@ -105,7 +107,7 @@ Scripts/verify-release.sh
 - Amphetamine 5.3.2 or later is the only power backend.
 - `NSAppleScript` is the only Automation mechanism.
 - `/usr/bin/pmset displaysleepnow` is the only display-sleep command.
-- `/usr/sbin/sysadminctl -screenLock status` is the screen-lock policy query.
+- The current device grace period is the primary screen-lock policy source. On macOS 26 and later, the app reads the same local MobileKeyBag value as Lock Screen settings because `sysadminctl` can report a stale legacy value. Missing or malformed data fails closed. On older systems only, `sysadminctl -screenLock status` is the bounded fallback.
 - Signing uses team `D79LWN85PJ` and bundle ID `com.andreaslar.caffeinemodes`.
 - Version 1 uses a manually delivered notarized DMG.
 - Architecture dependencies are mirrored in Constraints and Build vs Buy.
@@ -118,7 +120,7 @@ Scripts/verify-release.sh
 | Menu and setup UI | Build with AppKit | The interface is small and must reflect the product state model. |
 | Login item | Use ServiceManagement | `SMAppService.mainApp` is the supported macOS API. |
 | Power assertion inspection | Use IOKit | It provides a read-only process-level source for blockers. |
-| Screen-lock policy | Use `sysadminctl` status | The product must fail closed when the policy is not immediate. |
+| Screen-lock policy | Read the local device grace period; use `sysadminctl` only as a pre-macOS-26 fallback | The product must match current Lock Screen settings and fail closed when the policy is not immediate. |
 | Updates | Manual DMG | A feed and update framework are deferred until distribution is proven. |
 | Analytics | Do not build or buy | Version 1 has no telemetry requirement. |
 
@@ -127,7 +129,7 @@ Scripts/verify-release.sh
 ### Modules and boundaries
 
 - `CaffeineModesCore` contains the domain, session-safety rules, transition sequence, and persistence interface. `CaffeineModesCoreTests` tests both core and app-support behavior.
-- `CaffeineModesAppSupport` contains testable menu-selection and application-termination coordinators. It has no AppKit dependency.
+- `CaffeineModesAppSupport` contains testable setup, power-status, menu-selection, and application-termination presentation logic. It has no AppKit dependency.
 - `CaffeineModesApp` contains the AppKit UI and macOS adapters.
 - `AmphetamineControlling`, `PowerAssertionInspecting`, `ScreenLockPolicyChecking`, `DisplaySleeping`, and `ModeStateStoring` are narrow replaceable seams for verified external boundaries.
 - The app does not add extension registries, backend factories, or alternate power logic in version 1.
@@ -140,7 +142,7 @@ Scripts/verify-release.sh
 - Custom: An active session without a matching stored projection.
 - Preflight: Read-only checks that run before a transition mutates Amphetamine.
 - Verification: A fresh state query after all Amphetamine commands finish.
-- Owned command child: A fixed `sysadminctl` or `pmset` process started with `posix_spawn`. Caffeine Modes keeps exclusive `waitpid` ownership until timeout signaling ends, so the PID cannot be reused. It cannot target any existing process.
+- Owned command child: A fixed legacy `sysadminctl` or current `pmset` process started with `posix_spawn`. Caffeine Modes keeps exclusive `waitpid` ownership until timeout signaling ends, so the PID cannot be reused. It cannot target any existing process.
 
 ### Canonical owners
 
@@ -238,6 +240,11 @@ ModeSnapshot
   blockingProcesses
   detail
 
+PowerAssertionReport
+  displaySleepBlockingProcesses
+  systemSleepBlockingProcesses
+  diskIdleBlockingProcesses
+
 OwnedSessionSignature
   id
   mode
@@ -252,8 +259,8 @@ Only `OperatingMode`, the diagnostic `OwnedSessionSignature`, and onboarding fla
 ## 13. Integrations
 
 - Amphetamine: Local Apple Events by bundle ID. Minimum version is 5.3.2.
-- IOKit: Read-only `IOPMCopyAssertionsByProcess` inspection behind the shared transition deadline. One shared in-flight operation prevents worker accumulation after a timeout. A safety-critical caller that receives a joined operation's result then uses a new snapshot taken within the same deadline.
-- macOS screen-lock policy: Read-only `sysadminctl -screenLock status` parsing. Unknown output fails closed.
+- IOKit: Read-only `IOPMCopyAssertionsByProcess` inspection behind the shared transition deadline. Assertion types are classified as display sleep, automatic system sleep, or disk idle. Automatic system sleep includes network-client assertions used for active remote connections. Night and Travel consult only the display list. Off reports non-macOS process names for system and disk assertions and omits temporary macOS service assertions. Display assertions remain visible regardless of owner because they can block the requested screen sleep. One shared in-flight operation prevents worker accumulation after a timeout. A safety-critical caller that receives a joined operation's result then uses a new snapshot taken within the same deadline.
+- macOS screen-lock policy: Read-only local device-grace-period query through the Apple-signed MobileKeyBag framework. Zero seconds means immediate. Positive, negative, missing, or malformed values are not accepted as immediate. On macOS 26 and later, the app never trusts `sysadminctl` because its legacy output can disagree with Lock Screen settings. Earlier macOS versions may use bounded, fail-closed `sysadminctl -screenLock status` parsing only when the device-grace-period symbol is unavailable. The private read is acceptable for the Developer ID build but must be reassessed before any Mac App Store work.
 - macOS display sleep: Fixed `pmset displaysleepnow` process invocation.
 - ServiceManagement: `SMAppService.mainApp` registration and status.
 - GitHub: Private backup repository at `andreasnlarsen/caffeine-modes` after local GitHub CLI authentication.

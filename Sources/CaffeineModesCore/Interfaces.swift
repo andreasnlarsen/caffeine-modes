@@ -13,7 +13,7 @@ public protocol AmphetamineControlling: AnyObject {
 }
 
 public protocol PowerAssertionInspecting: AnyObject {
-    func displaySleepBlockingProcesses(timeout: TimeInterval) throws -> [String]
+    func inspect(timeout: TimeInterval) throws -> PowerAssertionReport
 }
 
 public protocol ScreenLockPolicyChecking: AnyObject {

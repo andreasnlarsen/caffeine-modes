@@ -32,7 +32,9 @@ case "$requirement" in
         rg -q 'final class SetupWindowController' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
         rg -q 'testMissingAmphetamineIsDeterministic' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testAutomationDenialIsReported' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
+        rg -q 'testCompletedSetupCloseDeliversOnboardingOnce' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
         rg -q 'testSetupChecksUseIndependentDeadlines' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
+        rg -q 'testPositiveDeviceGracePeriodIsNotImmediate' "$project_root/Tests/CaffeineModesCoreTests/ScreenLockStatusParserTests.swift"
         rg -q 'testReadinessClosedDisplayPostMutationErrorRetainsObservedCleanupProjection' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testClosedDisplayReadinessAnchorsExpiryAfterDelayedSessionCreation' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testReadinessActivePastExpectedExpiryIsBackendMismatch' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
@@ -40,7 +42,7 @@ case "$requirement" in
         rg -q 'testQuitEndRejectsUnsupportedAmphetamineBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testReadinessClosedDisplayPostMutationErrorRetainsObservedCleanupProjection' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testDisableTriggersRecoversPostMutationTimeoutWithinOriginalDeadline' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
-        run_tests 'SetupAndVersionTests'
+        run_tests 'SetupAndVersionTests|ScreenLockStatusParserTests|ApplicationCoordinatorTests/test.*SetupClose'
         run_tests 'ModeControllerTests/testQuit.*UnsupportedAmphetamine'
         ;;
     REQ-003)
@@ -53,9 +55,11 @@ case "$requirement" in
         ;;
     REQ-004)
         rg -q 'testNightChecksPolicyAndBlockersBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testNightDoesNotBlockOnSystemOrDiskAssertions' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testClassifierSeparatesDisplaySystemAndDiskAssertions' "$project_root/Tests/CaffeineModesCoreTests/PowerStatusPresentationTests.swift"
         rg -q 'testNightSleepsDisplayOnlyAfterAmphetamineVerification' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testJoinedCallerUsesFreshResultWithinOriginalDeadline' "$project_root/Tests/CaffeineModesCoreTests/FreshSingleFlightTests.swift"
-        run_tests 'ModeControllerTests|FreshSingleFlightTests'
+        run_tests 'ModeControllerTests|FreshSingleFlightTests|PowerStatusPresentationTests'
         ;;
     REQ-005)
         rg -q 'allowedTravelDurations = \[30, 60, 90, 120\]' "$project_root/Sources/CaffeineModesCore/Domain.swift"
@@ -84,7 +88,7 @@ case "$requirement" in
         rg -q 'testQuitInspectionRejectsUnsupportedAmphetamineBeforeRead' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testQuitEndRejectsUnsupportedAmphetamineBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testQuitRecoversPostMutationTimeoutAndFinalizesVerifiedOff' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
-        rg -q 'ModeSelectionCoordinator' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
+        rg -q 'MenuControllerRunner' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
         rg -q 'requestQuit()' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
         rg -q 'ApplicationTerminationCoordinator' "$project_root/Sources/CaffeineModesApp/main.swift"
         rg -q 'ApplicationTerminationRouter' "$project_root/Sources/CaffeineModesApp/main.swift"
@@ -99,6 +103,8 @@ case "$requirement" in
     REQ-007)
         rg -q 'NSStatusBar.system.statusItem' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
         rg -q 'SMAppService.mainApp' "$project_root/Sources/CaffeineModesApp/SystemAdapters.swift"
+        rg -q 'testOffDistinguishesDisplayAndAutomaticSleepBlockers' "$project_root/Tests/CaffeineModesCoreTests/PowerStatusPresentationTests.swift"
+        run_tests 'PowerStatusPresentationTests|SetupStatusPresentationTests'
         "$project_root/Scripts/verify-app.sh" >/dev/null 2>&1
         ;;
     REQ-008)

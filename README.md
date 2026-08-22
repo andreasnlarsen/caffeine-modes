@@ -17,10 +17,10 @@ Travel does not protect a Mac from heat. Do not run a Mac in an enclosed bag. A 
 3. Install `Caffeine Modes.app` from the notarized DMG in Applications.
 4. Open Caffeine Modes. It appears only in the menu bar.
 5. Open Setup Status.
-6. Grant Automation access when macOS asks. If it was denied, use the Automation Settings link.
-7. Disable Amphetamine Triggers from the setup window.
-8. Set the macOS Lock Screen password requirement to Immediately.
-9. Run the Closed-Display Test. Follow any Power Protect instructions shown by Amphetamine. Its one-minute test session expires automatically.
+6. Grant Automation access when macOS asks. If it was denied, use Open Automation Settings in the Automation access row.
+7. Disable Amphetamine Triggers from its setup row.
+8. Set the macOS Lock Screen password requirement to Immediately. The Immediate screen locking row links to the right settings pane. On macOS 26, Caffeine Modes reads the current device grace period used by this pane. It does not trust the older `sysadminctl` result, which can disagree with the visible setting.
+9. Run the closed-lid setup check with Run Check. It starts a one-minute Amphetamine session, verifies closed-display mode, and ends on its own. You do not need to close the lid. Follow any Power Protect instructions shown by Amphetamine.
 10. Enable Launch at Login when asked.
 
 Caffeine Modes does not request Accessibility access. It has no analytics, telemetry, or network service.
@@ -46,6 +46,18 @@ When you quit Caffeine Modes with an active Amphetamine session, choose one acti
 If Caffeine Modes cannot check Amphetamine, you can leave Amphetamine unchanged and quit. You can also cancel and keep Caffeine Modes open. The app does not offer Turn Off when it cannot verify the session state.
 
 Logout, restart, and shutdown do not show this prompt. Caffeine Modes exits without changing the Amphetamine session.
+
+## What the power status means
+
+Caffeine Modes keeps three macOS power facts separate:
+
+- **Display kept on** means a named process prevents the screen from sleeping. Night and Travel stop before they change Amphetamine when this is true.
+- **Automatic sleep blocked** means a named process prevents idle system sleep. The display can still turn off. Night and Travel do not block on this fact because their purpose is to keep work running.
+- **Disk idle sleep blocked** means a process keeps storage active. This does not mean that the display or Mac must stay awake. It appears only in the menu-bar tooltip.
+
+Off reports these facts. It never stops another process. Temporary assertions owned by macOS system services are omitted from the Off summary. Display blockers remain visible because they can stop Night or Travel from sleeping the screen.
+
+Codex can create an automatic-system-sleep assertion when **Prevent Sleep While Running** is on. **Keep Remote Control Awake While Plugged In** can use an automatic-system-sleep or network-client assertion during plugged-in remote work. Caffeine Modes reports both as **Automatic sleep blocked**. Claude and other developer tools can do the same. These assertions do not block Night or Travel unless the process also creates a display-sleep assertion.
 
 ## Development
 
@@ -95,8 +107,8 @@ Scripts/check-release-prerequisites.sh
 Build, sign, package, notarize, staple, and verify:
 
 ```sh
-APP_VERSION=1.0.1 BUILD_NUMBER=2 Scripts/release.sh
-APP_VERSION=1.0.1 Scripts/verify-release.sh
+APP_VERSION=1.0.2 BUILD_NUMBER=3 Scripts/release.sh
+APP_VERSION=1.0.2 Scripts/verify-release.sh
 ```
 
 Release artifacts stay under `dist/` and are ignored by Git.
@@ -120,7 +132,7 @@ gh repo create andreasnlarsen/caffeine-modes --private --source=. --remote=origi
 ## Repository structure
 
 - `Sources/CaffeineModesCore`: Domain and transition authority.
-- `Sources/CaffeineModesAppSupport`: Testable menu and Quit coordinators.
+- `Sources/CaffeineModesAppSupport`: Testable setup, power-status, menu, and Quit presentation and coordinators.
 - `Sources/CaffeineModesApp`: AppKit UI and macOS adapters.
 - `Tests/CaffeineModesCoreTests`: Fake-backed P0 tests.
 - `Resources`: App metadata and entitlements.

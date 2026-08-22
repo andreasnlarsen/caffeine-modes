@@ -64,6 +64,7 @@ done
 
 rg -q 'NSAppleScript' "$project_root/Sources/CaffeineModesApp/AmphetamineClient.swift"
 rg -q 'IOPMCopyAssertionsByProcess' "$project_root/Sources/CaffeineModesApp/SystemAdapters.swift"
+rg -q 'MKBDeviceGetGracePeriod' "$project_root/Sources/CaffeineModesApp/SystemAdapters.swift"
 rg -q '\["displaysleepnow"\]' "$project_root/Sources/CaffeineModesApp/SystemAdapters.swift"
 rg -q 'posix_spawn\(' "$project_root/Sources/CaffeineModesApp/SystemAdapters.swift"
 rg -q 'waitpid\(pid,' "$project_root/Sources/CaffeineModesApp/SystemAdapters.swift"
