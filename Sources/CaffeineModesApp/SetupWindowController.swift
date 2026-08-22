@@ -126,11 +126,15 @@ final class SetupWindowController: NSWindowController {
     @objc private func runReadinessTest() {
         let alert = NSAlert()
         alert.messageText = "Run the Closed-Display Test?"
-        alert.informativeText = "This starts a one-minute Amphetamine test session. Amphetamine may show its own Power Protect setup. The test ends the session after verification."
+        alert.informativeText = "This starts a one-minute Amphetamine test session. It can replace another session that appears before the command finishes. Amphetamine may show its own Power Protect setup. The session expires automatically."
         alert.addButton(withTitle: "Run Test")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        perform { try controller.runClosedDisplayReadinessTest() }
+        perform {
+            try controller.runClosedDisplayReadinessTest(
+                authorizingSessionReplacement: true
+            )
+        }
     }
 
     private func perform(_ action: () throws -> Void) {

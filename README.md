@@ -20,20 +20,32 @@ Travel does not protect a Mac from heat. Do not run a Mac in an enclosed bag. A 
 6. Grant Automation access when macOS asks. If it was denied, use the Automation Settings link.
 7. Disable Amphetamine Triggers from the setup window.
 8. Set the macOS Lock Screen password requirement to Immediately.
-9. Run the Closed-Display Test. Follow any Power Protect instructions shown by Amphetamine.
+9. Run the Closed-Display Test. Follow any Power Protect instructions shown by Amphetamine. Its one-minute test session expires automatically.
 10. Enable Launch at Login when asked.
 
 Caffeine Modes does not request Accessibility access. It has no analytics, telemetry, or network service.
 
 ## Daily use
 
-- Select Off to end a Caffeine Modes-owned session.
+- Select Off to restore normal sleep behavior. Confirm if Amphetamine has an active session.
 - Select Work for normal desk work.
 - Select Night before overnight work.
 - Select Travel and a duration before a short move.
 - Select Setup Status… when the menu reports an error.
 
-If Amphetamine has a session that Caffeine Modes did not create, the menu reports Custom. You must confirm before Caffeine Modes replaces it. Quit leaves an unowned Custom session unchanged.
+Confirm every Work, Night, or Travel start. Amphetamine does not provide a stable session identity. Your confirmation also allows the new mode to replace a session that appears between the safety check and the start command.
+
+Caffeine Modes also asks before it ends or replaces an active session, even when the policy matches the selected mode. A replacement alert names the mode that will start. Night and Travel also warn that the display will sleep and the Mac will lock after verification.
+
+When you quit Caffeine Modes with an active Amphetamine session, choose one action:
+
+- Turn Off and Quit.
+- Leave Session Running.
+- Cancel.
+
+If Caffeine Modes cannot check Amphetamine, you can leave Amphetamine unchanged and quit. You can also cancel and keep Caffeine Modes open. The app does not offer Turn Off when it cannot verify the session state.
+
+Logout, restart, and shutdown do not show this prompt. Caffeine Modes exits without changing the Amphetamine session.
 
 ## Development
 
@@ -52,7 +64,7 @@ Scripts/verify-app.sh
 Scripts/verify-safety.sh
 ```
 
-`Scripts/verify-app.sh` creates an ad-hoc signed universal app when no build exists. It does not start the app or change a power mode.
+`Scripts/verify-app.sh` rebuilds an ad-hoc signed universal app before verification. It does not start the app or change a power mode.
 
 Run one requirement gate:
 
@@ -83,8 +95,8 @@ Scripts/check-release-prerequisites.sh
 Build, sign, package, notarize, staple, and verify:
 
 ```sh
-APP_VERSION=1.0.0 BUILD_NUMBER=1 Scripts/release.sh
-APP_VERSION=1.0.0 Scripts/verify-release.sh
+APP_VERSION=1.0.1 BUILD_NUMBER=2 Scripts/release.sh
+APP_VERSION=1.0.1 Scripts/verify-release.sh
 ```
 
 Release artifacts stay under `dist/` and are ignored by Git.
@@ -108,6 +120,7 @@ gh repo create andreasnlarsen/caffeine-modes --private --source=. --remote=origi
 ## Repository structure
 
 - `Sources/CaffeineModesCore`: Domain and transition authority.
+- `Sources/CaffeineModesAppSupport`: Testable menu and Quit coordinators.
 - `Sources/CaffeineModesApp`: AppKit UI and macOS adapters.
 - `Tests/CaffeineModesCoreTests`: Fake-backed P0 tests.
 - `Resources`: App metadata and entitlements.

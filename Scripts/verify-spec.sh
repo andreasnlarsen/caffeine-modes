@@ -10,7 +10,10 @@ for section in {1..17}; do
 done
 
 # Spec Forge checks 1–17. Each check maps to one explicit contract marker.
-! rg -n '\b(fast|easy|secure)\b' "$spec" >/dev/null
+if rg -n '\b(fast|easy|secure)\b' "$spec" >/dev/null; then
+    print -u2 "SPEC.md contains an unmeasurable quality claim."
+    exit 1
+fi
 for requirement in {001..009}; do
     rg -q "REQ-$requirement.*Acceptance:" "$spec"
     rg -q "REQ-$requirement.*Scripts/verify-requirement.sh REQ-$requirement.*PASS REQ-$requirement" "$spec"
@@ -24,7 +27,6 @@ test "$(rg -c '^\- NG-' "$spec")" -ge 2
 rg -q '^## 9\. Build vs Buy Decisions' "$spec"
 rg -q 'XCTest' "$spec"
 rg -q 'at least 90%' "$spec"
-rg -q 'Greenfield — no existing code to scan' "$spec"
 rg -q 'Canonical owner.*ModeController' "$spec"
 rg -q 'No business rule has two owners' "$spec"
 rg -qi 'Amphetamine.*system of record|system of record.*Amphetamine' "$spec"

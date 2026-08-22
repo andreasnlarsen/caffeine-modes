@@ -21,7 +21,7 @@
 - Use `labelColor`, `secondaryLabelColor`, `windowBackgroundColor`, and other semantic AppKit colors.
 - The running menu-bar symbols are template images. macOS controls their color.
 - Passed setup checks use the semantic system accent through native symbol rendering.
-- Errors use native `NSAlert` warning treatment.
+- Errors use native `NSAlert` treatment.
 - The Finder icon may use an original navy, cream, amber, blue, and mint palette. These colors do not enter the menu UI.
 
 ## Spacing and size
@@ -46,7 +46,7 @@
 8. About Caffeine Modes.
 9. Quit Caffeine Modes.
 
-The selected mode uses one standard checkmark. Travel time appears in the disabled status line and tooltip. The menu-bar item does not use permanent text.
+The selected mode uses one standard checkmark. Travel time appears in the disabled status line and tooltip. The countdown rounds up to a whole minute and uses hours plus minutes at 60 minutes or more. The menu-bar item does not use permanent text.
 
 ## Symbols
 
@@ -70,13 +70,17 @@ Every symbol uses an accessibility description. No SF Symbol appears in the Find
 - Actions appear only as native buttons and links.
 - The default Check Again button supports Return.
 - Tab order follows the visual order.
-- The readiness test explains that it starts and ends a bounded Amphetamine session.
+- The readiness test explains that it starts a bounded Amphetamine session which expires automatically.
 
 ## Alerts and confirmation
 
-- Replace Custom: warning alert with Replace and Cancel.
+- End or replace active session: warning alert with Off or the target mode, the selected Travel duration when applicable, the exact action, and Cancel. Night and Travel state that the display will sleep and the Mac will lock after verification.
+- Start Work, Night, or Travel: warning alert with the exact mode, selected Travel duration, and Cancel. The text states that the start can replace a session that appears after preflight. Night and Travel also state that the display will sleep and the Mac will lock after verification.
+- Quit with active session: warning alert with Turn Off and Quit, Leave Session Running, and Cancel. The destructive choice names Off.
+- Quit when session inspection fails: warning alert with Leave Amphetamine Unchanged and Quit and Cancel. No destructive action appears.
+- System termination: no alert. Logout, restart, and shutdown continue without an Amphetamine read or mutation.
 - Disable Triggers: explicit confirmation before the setting changes.
-- Closed-display test: explicit confirmation and bounded-session explanation.
+- Closed-display test: explicit confirmation, bounded-session explanation, and a warning that the timed start can replace a session that appears after the Off check.
 - Transition error: native error alert with the exact blocking reason.
 - About: includes the Travel enclosed-bag warning.
 

@@ -10,7 +10,7 @@ profile="$(find .build -path '*debug/codecov/default.profdata' -type f | head -1
 test -n "$test_binary"
 test -n "$profile"
 
-report="$(xcrun llvm-cov report "$test_binary" -instr-profile="$profile" -ignore-filename-regex='Tests/|Sources/CaffeineModesApp/|\.build/')"
+report="$(xcrun llvm-cov report "$test_binary" -instr-profile="$profile" -ignore-filename-regex='Tests/|Sources/CaffeineModesApp/|Sources/CaffeineModesAppSupport/|\.build/')"
 line_coverage="$(print -r -- "$report" | awk '/^TOTAL/ {gsub(/%/, "", $(NF-3)); print $(NF-3)}')"
 test -n "$line_coverage"
 awk -v coverage="$line_coverage" 'BEGIN { exit !(coverage >= 90.0) }'

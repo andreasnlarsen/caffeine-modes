@@ -40,39 +40,84 @@ public struct AmphetamineState: Equatable, Codable, Sendable {
     public var displaySleepAllowed: Bool
     public var closedDisplayModeEnabled: Bool
     public var triggersEnabled: Bool
-    public var remainingMinutes: Int?
+    public var sessionTimeRemainingSeconds: Int
 
     public init(
         sessionIsActive: Bool,
         displaySleepAllowed: Bool,
         closedDisplayModeEnabled: Bool,
         triggersEnabled: Bool,
-        remainingMinutes: Int? = nil
+        sessionTimeRemainingSeconds: Int = 0
     ) {
         self.sessionIsActive = sessionIsActive
         self.displaySleepAllowed = displaySleepAllowed
         self.closedDisplayModeEnabled = closedDisplayModeEnabled
         self.triggersEnabled = triggersEnabled
-        self.remainingMinutes = remainingMinutes
+        self.sessionTimeRemainingSeconds = sessionTimeRemainingSeconds
     }
 
     public static let inactive = AmphetamineState(
         sessionIsActive: false,
         displaySleepAllowed: true,
         closedDisplayModeEnabled: false,
-        triggersEnabled: false
+        triggersEnabled: false,
+        sessionTimeRemainingSeconds: -3
     )
 }
 
+public enum OwnedSessionPurpose: String, Equatable, Codable, Sendable {
+    case activeMode
+    case pendingCleanup
+    case readinessTest
+}
+
 public struct OwnedSessionSignature: Equatable, Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case mode
+        case startedAt
+        case purpose
+        case expectedState
+        case schemaVersion
+    }
+
+    private static let currentSchemaVersion = 2
+
     public var id: UUID
     public var mode: OperatingMode
     public var startedAt: Date
+    public var purpose: OwnedSessionPurpose
+    public var expectedState: AmphetamineState?
+    public private(set) var schemaVersion: Int
 
-    public init(id: UUID = UUID(), mode: OperatingMode, startedAt: Date) {
+    public var usesLegacyProjectionFormat: Bool {
+        schemaVersion < Self.currentSchemaVersion
+    }
+
+    public init(
+        id: UUID = UUID(),
+        mode: OperatingMode,
+        startedAt: Date,
+        purpose: OwnedSessionPurpose = .activeMode,
+        expectedState: AmphetamineState? = nil
+    ) {
         self.id = id
         self.mode = mode
         self.startedAt = startedAt
+        self.purpose = purpose
+        self.expectedState = expectedState
+        schemaVersion = Self.currentSchemaVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        mode = try container.decode(OperatingMode.self, forKey: .mode)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        purpose = try container.decodeIfPresent(OwnedSessionPurpose.self, forKey: .purpose)
+            ?? .activeMode
+        expectedState = try container.decodeIfPresent(AmphetamineState.self, forKey: .expectedState)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
     }
 }
 
@@ -148,8 +193,10 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
     case triggersEnabled
     case screenLockNotImmediate
     case displaySleepBlocked([String])
-    case unownedSessionRequiresConfirmation
+    case activeSessionRequiresConfirmation
+    case sessionStartRequiresConfirmation
     case invalidTravelDuration(Int)
+    case operationTimedOut
     case verificationFailed(String)
     case backend(String)
 
@@ -167,10 +214,14 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
             "Set Require password after screen saver begins or display is turned off to Immediately."
         case let .displaySleepBlocked(processes):
             "Display sleep is blocked by: \(processes.joined(separator: ", "))."
-        case .unownedSessionRequiresConfirmation:
-            "Amphetamine has a session that Caffeine Modes does not own."
+        case .activeSessionRequiresConfirmation:
+            "Amphetamine has an active session. Confirm before Caffeine Modes ends or replaces it."
+        case .sessionStartRequiresConfirmation:
+            "Confirm before Caffeine Modes starts a new Amphetamine session."
         case let .invalidTravelDuration(minutes):
             "Travel supports only 30, 60, 90, or 120 minutes. Received \(minutes)."
+        case .operationTimedOut:
+            "The operation did not finish before its safety deadline."
         case let .verificationFailed(message), let .backend(message):
             message
         }

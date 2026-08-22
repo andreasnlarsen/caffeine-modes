@@ -1,4 +1,5 @@
 import AppKit
+import CaffeineModesAppSupport
 import CaffeineModesCore
 import Foundation
 
@@ -7,6 +8,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let controller: ModeControlling
     private let store: ModeStateStoring
     private let launchManager: LaunchAtLoginManaging
+    private let requestQuit: () -> Void
     private let setupWindow: SetupWindowController
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
@@ -15,15 +17,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var modeItems: [OperatingModeKey: NSMenuItem] = [:]
     private var snapshot = ModeSnapshot(requestedMode: .off, observedState: nil, ownershipMarker: nil, health: .setupIncomplete)
     private var timer: Timer?
+    private lazy var modeSelectionCoordinator = ModeSelectionCoordinator(
+        transition: { [controller] mode, authorization in
+            try controller.transition(to: mode, replacingActiveSession: authorization)
+        },
+        confirm: { [weak self] reason in
+            self?.confirmModeSelection(reason) ?? false
+        }
+    )
 
     init(
         controller: ModeControlling,
         store: ModeStateStoring,
-        launchManager: LaunchAtLoginManaging
+        launchManager: LaunchAtLoginManaging,
+        requestQuit: @escaping () -> Void
     ) {
         self.controller = controller
         self.store = store
         self.launchManager = launchManager
+        self.requestQuit = requestQuit
         self.setupWindow = SetupWindowController(controller: controller)
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
@@ -117,24 +129,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func select(_ mode: OperatingMode) {
         do {
-            snapshot = try controller.transition(to: mode, replacingUnownedSession: false)
-        } catch ModeControlError.unownedSessionRequiresConfirmation {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Replace the Current Amphetamine Session?"
-            alert.informativeText = "Caffeine Modes did not create this session. Replacing it will end the current Amphetamine settings."
-            alert.addButton(withTitle: "Replace")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            do {
-                snapshot = try controller.transition(to: mode, replacingUnownedSession: true)
-            } catch {
-                showError(error)
+            if let selected = try modeSelectionCoordinator.select(mode) {
+                snapshot = selected
             }
         } catch {
             showError(error)
         }
         refresh()
+    }
+
+    private func confirmModeSelection(_ reason: ModeSelectionConfirmation) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        let presentation = reason.presentation
+        alert.messageText = presentation.title
+        alert.informativeText = presentation.message
+        alert.addButton(withTitle: presentation.confirmButtonTitle)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @objc private func showSetup() {
@@ -159,13 +171,41 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quitApp() {
-        do {
-            try controller.prepareToQuit()
-            NSApplication.shared.terminate(nil)
-        } catch {
-            showError(error)
-            refresh()
+        requestQuit()
+    }
+
+    func presentTerminationError(_ error: Error) {
+        showError(error)
+        refresh()
+    }
+
+    func confirmQuitWithActiveSession() -> ActiveSessionQuitChoice {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        let presentation = ActiveSessionQuitConfirmationPresentation.activeSession
+        alert.messageText = presentation.title
+        alert.informativeText = presentation.message
+        alert.addButton(withTitle: presentation.endButtonTitle)
+        alert.addButton(withTitle: presentation.leaveButtonTitle)
+        alert.addButton(withTitle: presentation.cancelButtonTitle)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .endAndQuit
+        case .alertSecondButtonReturn: return .leaveRunning
+        default: return .cancel
         }
+    }
+
+    func confirmQuitWithoutInspection() -> UninspectedSessionQuitChoice {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        let presentation = UninspectedSessionQuitConfirmationPresentation.inspectionFailed
+        alert.messageText = presentation.title
+        alert.informativeText = presentation.message
+        alert.addButton(withTitle: presentation.leaveButtonTitle)
+        alert.addButton(withTitle: presentation.cancelButtonTitle)
+        return alert.runModal() == .alertFirstButtonReturn
+            ? .leaveUnchangedAndQuit
+            : .cancel
     }
 
     private func refresh() {
@@ -200,7 +240,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 symbol = "moon.fill"
             case let .travel(_, expiresAt):
                 let remaining = max(0, Int(expiresAt.timeIntervalSinceNow.rounded(.up)))
-                title = "Travel · \(format(seconds: remaining)) remaining"
+                title = "Travel · \(TravelCountdownFormatter.string(seconds: remaining)) remaining"
                 symbol = "car.fill"
             case .custom:
                 title = snapshot.detail ?? "Custom Amphetamine session"
@@ -216,15 +256,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func externalBlockerSummary(prefix: String) -> String {
-        let blockers = (try? IOKitPowerAssertionInspector().displaySleepBlockingProcesses()) ?? []
+        let blockers = (try? IOKitPowerAssertionInspector().displaySleepBlockingProcesses(timeout: 0.25)) ?? []
         guard !blockers.isEmpty else { return prefix }
         return "\(prefix) · Display held awake by \(blockers.joined(separator: ", "))"
-    }
-
-    private func format(seconds: Int) -> String {
-        let hours = seconds / 3600
-        let minutes = (seconds % 3600 + 59) / 60
-        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 
     private func showError(_ error: Error) {

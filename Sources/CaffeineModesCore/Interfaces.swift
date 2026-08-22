@@ -4,24 +4,24 @@ public protocol AmphetamineControlling: AnyObject {
     var isInstalled: Bool { get }
     var installedVersion: String? { get }
 
-    func readState() throws -> AmphetamineState
-    func startInfiniteSession(displaySleepAllowed: Bool) throws
-    func startTimedSession(minutes: Int, displaySleepAllowed: Bool) throws
-    func endSession() throws
-    func setClosedDisplayMode(enabled: Bool) throws
-    func setTriggers(enabled: Bool) throws
+    func readState(timeout: TimeInterval) throws -> AmphetamineState
+    func startInfiniteSession(displaySleepAllowed: Bool, timeout: TimeInterval) throws
+    func startTimedSession(minutes: Int, displaySleepAllowed: Bool, timeout: TimeInterval) throws
+    func endSession(timeout: TimeInterval) throws
+    func setClosedDisplayMode(enabled: Bool, timeout: TimeInterval) throws
+    func setTriggers(enabled: Bool, timeout: TimeInterval) throws
 }
 
 public protocol PowerAssertionInspecting: AnyObject {
-    func displaySleepBlockingProcesses() throws -> [String]
+    func displaySleepBlockingProcesses(timeout: TimeInterval) throws -> [String]
 }
 
 public protocol ScreenLockPolicyChecking: AnyObject {
-    func hasImmediateScreenLock() throws -> Bool
+    func hasImmediateScreenLock(timeout: TimeInterval) throws -> Bool
 }
 
 public protocol DisplaySleeping: AnyObject {
-    func sleepDisplay() throws
+    func sleepDisplay(timeout: TimeInterval) throws
 }
 
 public protocol ModeStateStoring: AnyObject {
@@ -35,6 +35,15 @@ public protocol TimeProviding: AnyObject {
     var now: Date { get }
 }
 
+public protocol MonotonicTimeProviding: AnyObject {
+    var now: TimeInterval { get }
+}
+
+public final class SystemMonotonicTimeProvider: MonotonicTimeProviding {
+    public init() {}
+    public var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+}
+
 public final class SystemTimeProvider: TimeProviding {
     public init() {}
     public var now: Date { Date() }
@@ -42,9 +51,10 @@ public final class SystemTimeProvider: TimeProviding {
 
 public protocol ModeControlling: AnyObject {
     func reconcile() -> ModeSnapshot
-    func transition(to mode: OperatingMode, replacingUnownedSession: Bool) throws -> ModeSnapshot
+    func transition(to mode: OperatingMode, replacingActiveSession: Bool) throws -> ModeSnapshot
     func setupReport() -> SetupReport
     func disableTriggers() throws
-    func runClosedDisplayReadinessTest() throws
-    func prepareToQuit() throws
+    func runClosedDisplayReadinessTest(authorizingSessionReplacement: Bool) throws
+    func hasActiveSessionForQuit() throws -> Bool
+    func endActiveSessionForQuit() throws
 }

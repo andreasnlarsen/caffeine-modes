@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="${0:A:h:h}"
-version="${APP_VERSION:-1.0.0}"
+version="${APP_VERSION:-1.0.1}"
 dmg="${1:-$project_root/dist/Caffeine-Modes-$version.dmg}"
 mount_point=""
 
@@ -24,6 +24,8 @@ test -n "$mount_point"
 bundle="$mount_point/Caffeine Modes.app"
 test -d "$bundle"
 codesign --verify --deep --strict --verbose=2 "$bundle"
+entitlements="$(codesign -d --entitlements :- "$bundle" 2>/dev/null | tr -d '[:space:]')"
+[[ "$entitlements" == *'<key>com.apple.security.automation.apple-events</key><true/>'* ]]
 xcrun stapler validate "$bundle"
 spctl --assess --type execute --verbose=2 "$bundle"
 
