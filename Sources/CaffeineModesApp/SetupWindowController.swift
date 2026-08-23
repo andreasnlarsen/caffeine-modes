@@ -311,7 +311,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         unlockStack.alignment = .leading
         unlockStack.spacing = 8
 
-        let stack = NSStackView(views: [launchCheckbox, separator(), unlockStack])
+        let workLidNote = detailText(
+            "Starting Work turns off Amphetamine’s closed-display mode, so the lid follows normal macOS behavior. That includes sessions you start in Amphetamine yourself."
+        )
+
+        let stack = NSStackView(views: [launchCheckbox, separator(), unlockStack, separator(), workLidNote])
         return paneStack(stack, spacing: 20)
     }
 

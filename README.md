@@ -8,6 +8,8 @@ It gives you three policies:
 - Night turns off all connected displays and keeps the locked Mac working. After you unlock, choose Off or Work.
 - Travel does the same for 30, 60, 90, or 120 minutes. After you unlock, choose Off or Work. Amphetamine's timer still ends Travel.
 
+Starting Work turns off Amphetamine's closed-display mode, so the lid follows normal macOS behavior. That default stays off for sessions you start in Amphetamine yourself, until you enable it again in Amphetamine. When an active session is keeping a closed Mac awake, Work stops without changing anything and asks you to open the lid first.
+
 Night and Travel can create heat when the Mac is closed. Do not run a Mac in an enclosed bag. A location or network change can still stop a network-dependent task.
 
 ## Install for a friend
@@ -125,8 +127,8 @@ Scripts/check-release-prerequisites.sh
 Build, sign, package, notarize, staple, and verify:
 
 ```sh
-APP_VERSION=1.1.0 BUILD_NUMBER=4 Scripts/release.sh
-APP_VERSION=1.1.0 Scripts/verify-release.sh
+APP_VERSION=1.1.1 BUILD_NUMBER=5 Scripts/release.sh
+APP_VERSION=1.1.1 Scripts/verify-release.sh
 ```
 
 Release artifacts stay under `dist/` and are ignored by Git.
@@ -171,6 +173,12 @@ Test Work, Night, and Travel in these screen setups:
 For each setup, start from Off. Verify that Work does not lock or turn off a display. Verify that Night and Travel turn off every connected display and keep the locked Mac working. Show the lock screen without unlocking and verify that the displays turn off again. Then unlock. Verify that Caffeine Modes does not change Amphetamine until you confirm Off or Work.
 
 For Travel, also disconnect the closed Mac, move it, and reconnect it at a new location. Verify both an external-display reconnect and opening the built-in display. This check does not prove network continuity.
+
+Check the Work safety rule separately:
+
+1. Turn Off Amphetamine. Enable its closed-display default. Keep the Mac closed with a working external display. Start Work. Verify that Work starts, the external display stays on, and Amphetamine's closed-display default turns off.
+2. Start Night or Travel. Keep the lid closed. Try to start Work. Verify that Caffeine Modes names the active mode, changes nothing, and asks you to open the lid.
+3. Open the lid. Start Work again. Verify that the previous session ends, Work starts, and the displays stay on.
 
 After the nine mode and screen-setup checks, select Off before you put the Mac in a bag. With the app idle, run `Scripts/verify-performance.sh`.
 

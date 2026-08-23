@@ -4,7 +4,14 @@ import Foundation
 final class FakeAmphetamine: AmphetamineControlling {
     var isInstalled = true
     var installedVersion: String? = "5.3.2"
-    var state: AmphetamineState = .inactive
+    var state: AmphetamineState = .inactive {
+        didSet {
+            if !state.sessionIsActive {
+                inactiveClosedDisplayDefaultEnabled = state.closedDisplayModeEnabled
+            }
+        }
+    }
+    var inactiveClosedDisplayDefaultEnabled = false
     var commands: [String] = []
     var readError: Error?
     var failureCommand: String?
@@ -54,7 +61,15 @@ final class FakeAmphetamine: AmphetamineControlling {
         beginOperation(timeout: timeout)
         try failIfRequested("end")
         commands.append("end")
-        if !refuseToEnd { state = .inactive }
+        if !refuseToEnd {
+            state = AmphetamineState(
+                sessionIsActive: false,
+                displaySleepAllowed: true,
+                closedDisplayModeEnabled: inactiveClosedDisplayDefaultEnabled,
+                triggersEnabled: state.triggersEnabled,
+                sessionTimeRemainingSeconds: -3
+            )
+        }
         try errorAfterMutationIfRequested("end")
         try timeoutAfterMutationIfRequested("end")
     }
@@ -159,9 +174,15 @@ final class FakePowerProtect: PowerProtectInspecting {
 
 final class FakeLidState: LidStateInspecting {
     var state: LidState = .open
+    var queuedStates: [LidState] = []
+    private(set) var callCount = 0
 
     func lidState() -> LidState {
-        state
+        callCount += 1
+        if !queuedStates.isEmpty {
+            return queuedStates.removeFirst()
+        }
+        return state
     }
 }
 

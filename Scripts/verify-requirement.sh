@@ -109,7 +109,9 @@ case "$requirement" in
         rg -q 'operationTimeout: TimeInterval = 2' "$project_root/Sources/CaffeineModesCore/ModeController.swift"
         rg -q 'mutationRecoveryReserve: TimeInterval = 0.5' "$project_root/Sources/CaffeineModesCore/ModeController.swift"
         rg -q 'testWorkNeverChangesClosedDisplayModeAfterSessionStart' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
-        rg -q 'testWorkBlocksUnsafeClosedLidNormalizationBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkNormalizesInactiveClosedDisplayDefaultWithClosedOrUnknownLid' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkBlocksActiveClosedDisplaySessionWithClosedOrUnknownLidBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkRechecksLidImmediatelyBeforeEndingActiveClosedDisplaySession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testUnlockNeverMutatesUnownedCustomSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -Fq 'with timeout of \(timeoutLiteral) seconds' "$project_root/Sources/CaffeineModesApp/AmphetamineClient.swift"
         run_tests 'ModeControllerTests|ApplicationCoordinatorTests|SetupAndVersionTests/testReadiness.*Mutation'

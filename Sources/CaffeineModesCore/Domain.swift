@@ -81,6 +81,18 @@ public struct AmphetamineState: Equatable, Codable, Sendable {
         triggersEnabled: false,
         sessionTimeRemainingSeconds: -3
     )
+
+    public var closedDisplayPolicy: ClosedDisplayPolicyState {
+        if sessionIsActive {
+            return .activeSession(enabled: closedDisplayModeEnabled)
+        }
+        return .inactiveDefault(enabled: closedDisplayModeEnabled)
+    }
+}
+
+public enum ClosedDisplayPolicyState: Equatable, Sendable {
+    case inactiveDefault(enabled: Bool)
+    case activeSession(enabled: Bool)
 }
 
 public enum OwnedSessionPurpose: String, Equatable, Codable, Sendable {
@@ -280,7 +292,7 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
     case triggersEnabled
     case screenLockNotImmediate
     case powerProtectMissing
-    case openLidToStartWork
+    case openLidBeforeSwitchingToWork(from: OperatingMode)
     case screenLockStateUnavailable(String)
     case displaySleepBlocked([String])
     case activeSessionRequiresConfirmation
@@ -304,8 +316,15 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
             "Set Require password after screen saver begins or display is turned off to Immediately."
         case .powerProtectMissing:
             "Install Amphetamine Power Protect before you use Night or Travel."
-        case .openLidToStartWork:
-            "Open the Mac lid once, then start Work again."
+        case let .openLidBeforeSwitchingToWork(sourceMode):
+            switch sourceMode {
+            case .night:
+                "Night is keeping this closed Mac awake. Open the lid before you start Work."
+            case .travel:
+                "Travel is keeping this closed Mac awake. Open the lid before you start Work."
+            case .off, .work, .custom:
+                "Amphetamine is keeping this closed Mac awake. Open the lid before you start Work."
+            }
         case let .screenLockStateUnavailable(message):
             message
         case let .displaySleepBlocked(processes):

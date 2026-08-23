@@ -88,6 +88,7 @@ Every symbol uses an accessibility description. No SF Symbol appears in the Find
 - Each pane ends one outer inset below its final control or note. The window does not reserve an empty fixed-height canvas.
 - Developer appears only when the user holds Option while opening Settings.
 - General contains Launch at Login and the Off-or-Work suggestion shown after Night or Travel unlocks. The user must confirm before the app changes Amphetamine.
+- General states once, as a short footnote, that starting Work turns off Amphetamine’s closed-display mode and that this includes sessions the user starts in Amphetamine. No other pane repeats this fact.
 - Setup contains Amphetamine, Automation, Triggers, immediate lock, and Power Protect as five self-contained rows.
 - Each row shows a 16-point state symbol, a title, a per-row detail line, and at most one trailing action. Rows that pass show no action. A row that cannot run yet names its precondition instead of opening a confirmation.
 - Every check uses one of three honest states: complete, needs action, or not checked. A check that has never run uses the not-checked symbol, never a warning.
@@ -113,6 +114,7 @@ Every symbol uses an accessibility description. No SF Symbol appears in the Find
 - Developer diagnostic: explicit confirmation, the one-minute bounded-session explanation with automatic expiry, and a warning that the timed start can replace a session that appears after the Off check. The confirmation never appears when the app already knows an active session prevents the diagnostic; the row states the Off precondition instead.
 - A failed Disable Triggers action or Developer diagnostic shows its exact failure reason in the row, not in a modal alert.
 - Transition error: native error alert with the exact blocking reason.
+- Work closed-lid stop: when an active closed-display session keeps a closed Mac awake, the error names the holder first — Night, Travel, or Amphetamine — then tells the user to open the lid before they start Work. Turning off the inactive closed-display default shows no alert.
 - About: warns that Night and Travel can create heat when the Mac is closed. Enclosed-bag use is unsupported.
 
 ## Application icon

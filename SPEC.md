@@ -2,7 +2,7 @@
 
 Status: Active implementation contract
 
-Version: 1.1.0
+Version: 1.1.1
 
 Last updated: 2026-08-23
 
@@ -50,7 +50,7 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 - REQ-003 — Mode reconciliation. Acceptance: Off, Work, Night, Travel, and Custom are mutually exclusive projections of Amphetamine state plus one stored diagnostic session signature.
 - REQ-004 — Night transition and wake lifecycle. Acceptance: Night blocks named external display assertions before mutation, applies its Amphetamine policy, verifies that policy, and only then requests display sleep. A screen wake while still locked keeps Night active and causes one verified re-sleep request after 30 seconds. Each new screen-visibility event gets at most one bounded retry after another 30 seconds if that re-sleep fails. A verified unlock performs no Amphetamine mutation. It asks the user to confirm the saved Off or Work suggestion. Automatic-system-sleep and disk-idle assertions remain observational.
 - REQ-005 — Travel transition. Acceptance: Travel accepts only 30, 60, 90, or 120 minutes, stores its expiry, uses an Amphetamine timed session, follows the same wake and unlock lifecycle as Night, and reconciles to Off when its backend timer expires.
-- REQ-006 — Session and clamshell safety. Acceptance: A stored signature never authorizes a destructive user action. Every manual Work, Night, or Travel start and active-session replacement needs an explicit user choice. An unlock signal is read-only. The saved post-unlock setting selects which confirmation appears first, but it never authorizes a mutation. A new active mode starts only after any replaced session is ended and Off is verified. Work never disables closed-display mode after its session starts. If an inactive closed-display default must be normalized, the lid must be verified open before mutation. Relaunch, partial failure, user Quit, and automatic lifecycle handling never silently mutate an unowned session.
+- REQ-006 — Session and clamshell safety. Acceptance: A stored signature never authorizes a destructive user action. Every manual Work, Night, or Travel start and active-session replacement needs an explicit user choice. An unlock signal is read-only. The saved post-unlock setting selects which confirmation appears first, but it never authorizes a mutation. A new active mode starts only after any replaced session is ended and Off is verified. Work never disables closed-display mode after its session starts. Work normalizes an inactive closed-display default to normal macOS lid behavior without a lid check, because no session is keeping a closed Mac awake; the normalized Amphetamine default also applies to later manual Amphetamine sessions. When an active closed-display session keeps the Mac awake and the lid is not verified open, Work stops before mutation and its error names the mode holding the Mac awake. Relaunch, partial failure, user Quit, and automatic lifecycle handling never silently mutate an unowned session.
 - REQ-007 — Native menu and Settings app. Acceptance: The `NSStatusItem` menu, template icon, Settings access, How Modes Work access, countdown, actual mode checkmark, and `SMAppService.mainApp` Launch at Login toggle reflect observed state. Settings uses General, Setup, and Modes toolbar tabs. Developer appears only when Settings opens with Option held. Off reports display and system-sleep blockers as distinct facts; disk-idle blockers appear only in the tooltip. Controller work runs on serial worker queues.
 - REQ-008 — Boundary limits. Acceptance: The repository contains no root helper, Accessibility request, direct Amphetamine preference edit, `osascript` process, `pmset disablesleep`, or unrelated external-process termination path.
 - REQ-009 — Release artifact. Acceptance: The DMG contains an arm64 and x86_64 app with hardened runtime, LEAD MEDIA AS Developer ID signing, accepted notarization, a staple ticket, and passing Gatekeeper assessment.
@@ -186,7 +186,7 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 | From | Trigger | To | Finalizing path |
 |---|---|---|---|
 | Any active state | User confirms Off | Off | End, query, verify inactive, clear marker |
-| Off or active state | User confirms Work | Work | Preflight, end and verify any replaced session, normalize the inactive closed-display default when safe, start, query, commit |
+| Off or active state | User confirms Work | Work | Preflight, verify an open lid before replacing an active closed-display session, end and verify any replaced session, normalize the inactive closed-display default, start, query, commit |
 | Off or active state | User confirms Night | Night | Preflight, end and verify any replaced session, start, enable closed-display mode, query, commit, sleep all displays |
 | Off or active state | User confirms Travel duration | Travel | Preflight, end and verify any replaced session, timed start, enable closed-display mode, query, commit, sleep all displays |
 | Night or Travel | Display wakes but Mac remains locked | Same mode | Arm a 30-second deadline, re-verify mode, ownership, lock state, and display blockers, then request display sleep |
@@ -228,7 +228,7 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 - Work, Night, Travel, and the Developer diagnostic cannot start without explicit user authorization. No mode starts or ends automatically after unlock.
 - No active session can be ended or replaced without an explicit user confirmation.
 - Night or Travel cannot start with failed setup, missing required Power Protect, a non-immediate lock policy, or a named external display blocker.
-- A closed-lid inactive default cannot be disabled as preparation for Work. The user must open the lid first.
+- Work cannot end an active closed-display session that keeps the Mac awake while the lid is not verified open. The user must open the lid first.
 - Travel cannot be indefinite or use a duration outside 30, 60, 90, and 120 minutes.
 - Quit can leave an active session running. If the user chooses Turn Off and Quit, Quit cannot finish until Off is verified. If session inspection fails, Quit offers only a no-mutation leave-and-quit choice or Cancel.
 - Normal termination requests, including external user Quit requests, use the user Quit flow. A power-off notification or an Apple Event reason for logout, restart, or shutdown selects the system route. The system route cannot open a prompt, read Amphetamine, or block logout, restart, or shutdown.

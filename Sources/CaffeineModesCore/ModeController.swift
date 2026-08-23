@@ -162,6 +162,15 @@ public final class ModeController: ModeControlling {
         let preflightMatchesStoredSignature = before.ownershipMarker.map {
             stateMatchesOwnedSignature(preflightState, signature: $0)
         } ?? false
+        let preflightSourceMode = preflightMatchesStoredSignature
+            ? before.requestedMode
+            : .custom
+        if mode == .work {
+            try requireOpenLidBeforeReplacingActiveClosedDisplaySession(
+                preflightState,
+                sourceMode: preflightSourceMode
+            )
+        }
         if preflightState.sessionIsActive, !replacingActiveSession {
             throw ModeControlError.activeSessionRequiresConfirmation
         }
@@ -179,6 +188,12 @@ public final class ModeController: ModeControlling {
         do {
             var startState = preflightState
             if targetMode != .off, startState.sessionIsActive {
+                if targetMode == .work {
+                    try requireOpenLidBeforeReplacingActiveClosedDisplaySession(
+                        startState,
+                        sourceMode: preflightSourceMode
+                    )
+                }
                 preStartMutationWasAttempted = true
                 try endAmphetamineSession(deadline: deadline)
                 startState = try readAmphetamineState(deadline: deadline)
@@ -303,6 +318,16 @@ public final class ModeController: ModeControlling {
 
             return snapshot(committedMode, observed, .ready, marker: marker)
         } catch {
+            if !preStartMutationWasAttempted,
+               !sessionStartWasAttempted,
+               let modeError = error as? ModeControlError {
+                switch modeError {
+                case .openLidBeforeSwitchingToWork:
+                    throw modeError
+                default:
+                    break
+                }
+            }
             if !pendingCleanupWasPersisted {
                 if targetMode == .off {
                     store.ownedSessionSignature = verifiedPriorSignatureAfterFailedMutation(
@@ -662,12 +687,6 @@ public final class ModeController: ModeControlling {
             guard !state.triggersEnabled else { throw ModeControlError.triggersEnabled }
         }
 
-        if mode == .work,
-           state.closedDisplayModeEnabled,
-           lidState.lidState() != .open {
-            throw ModeControlError.openLidToStartWork
-        }
-
         if mode.requiresDisplaySleep {
             guard powerProtect.inspect().isReady else {
                 throw ModeControlError.powerProtectMissing
@@ -695,9 +714,8 @@ public final class ModeController: ModeControlling {
                 "Amphetamine must be Off before Caffeine Modes prepares a new session."
             )
         }
-        guard state.closedDisplayModeEnabled else { return state }
-        guard lidState.lidState() == .open else {
-            throw ModeControlError.openLidToStartWork
+        guard case .inactiveDefault(enabled: true) = state.closedDisplayPolicy else {
+            return state
         }
         try amphetamine.setClosedDisplayMode(
             enabled: false,
@@ -711,6 +729,18 @@ public final class ModeController: ModeControlling {
             )
         }
         return observed
+    }
+
+    private func requireOpenLidBeforeReplacingActiveClosedDisplaySession(
+        _ state: AmphetamineState,
+        sourceMode: OperatingMode
+    ) throws {
+        guard case .activeSession(enabled: true) = state.closedDisplayPolicy else {
+            return
+        }
+        guard lidState.lidState() == .open else {
+            throw ModeControlError.openLidBeforeSwitchingToWork(from: sourceMode)
+        }
     }
 
     private func makeDeadline(timeout: TimeInterval? = nil) -> OperationDeadline {

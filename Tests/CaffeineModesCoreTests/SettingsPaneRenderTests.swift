@@ -49,6 +49,11 @@ final class SettingsPaneRenderTests: XCTestCase {
         let topEdge = try windowTopEdge(of: windowController)
         try snapshot(windowController, name: "general")
         XCTAssertEqual(windowController.window?.title, "General")
+        XCTAssertEqual(
+            staticTextCount(in: windowController, containing: "closed-display mode"),
+            1,
+            "General must state the Work closed-display note exactly once"
+        )
 
         try selectPane(windowController, .setup)
         waitUntilIdle(windowController)
@@ -262,6 +267,23 @@ final class SettingsPaneRenderTests: XCTestCase {
         }
         pumpRunLoop(seconds: 0.1)
         return windowController
+    }
+
+    @MainActor
+    private func staticTextCount(
+        in windowController: SettingsWindowController,
+        containing fragment: String
+    ) -> Int {
+        guard let contentView = windowController.window?.contentView else { return 0 }
+        var queue: [NSView] = [contentView]
+        var count = 0
+        while let view = queue.popLast() {
+            if let label = view as? NSTextField, label.stringValue.contains(fragment) {
+                count += 1
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return count
     }
 
     @MainActor
