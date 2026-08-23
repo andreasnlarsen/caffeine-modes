@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             screenLock: SystemScreenLockPolicyChecker(),
             screenLockState: CGSessionScreenLockStateInspector(),
             powerProtect: AmphetaminePowerProtectInspector(),
-            lidState: IOKitLidStateInspector(),
+            clamshellContext: SystemClamshellContextInspector(),
             display: PMSetDisplaySleeper(),
             store: store
         )

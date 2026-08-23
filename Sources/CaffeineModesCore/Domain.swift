@@ -17,6 +17,14 @@ public enum OperatingMode: Equatable, Codable, Sendable {
         }
     }
 
+    fileprivate var closedDisplaySessionHolderName: String {
+        switch self {
+        case .night: "Night"
+        case .travel: "Travel"
+        case .off, .work, .custom: "Amphetamine"
+        }
+    }
+
     public var travelDurationMinutes: Int? {
         guard case let .travel(durationMinutes, _) = self else { return nil }
         return durationMinutes
@@ -41,6 +49,33 @@ public enum LidState: Equatable, Sendable {
     case open
     case closed
     case unavailable
+}
+
+public struct ClamshellContext: Equatable, Sendable {
+    public var lidState: LidState
+    public var externalPowerConnected: Bool?
+    public var activeExternalDisplayPresent: Bool?
+
+    public init(
+        lidState: LidState,
+        externalPowerConnected: Bool?,
+        activeExternalDisplayPresent: Bool?
+    ) {
+        self.lidState = lidState
+        self.externalPowerConnected = externalPowerConnected
+        self.activeExternalDisplayPresent = activeExternalDisplayPresent
+    }
+
+    public var permitsActiveClosedDisplaySessionReplacement: Bool {
+        switch lidState {
+        case .open:
+            true
+        case .closed:
+            externalPowerConnected == true && activeExternalDisplayPresent == true
+        case .unavailable:
+            false
+        }
+    }
 }
 
 public enum ControlHealth: String, Equatable, Codable, Sendable {
@@ -292,7 +327,10 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
     case triggersEnabled
     case screenLockNotImmediate
     case powerProtectMissing
-    case openLidBeforeSwitchingToWork(from: OperatingMode)
+    case openLidBeforeReplacingClosedDisplaySession(
+        from: OperatingMode,
+        to: OperatingMode
+    )
     case screenLockStateUnavailable(String)
     case displaySleepBlocked([String])
     case activeSessionRequiresConfirmation
@@ -316,15 +354,8 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
             "Set Require password after screen saver begins or display is turned off to Immediately."
         case .powerProtectMissing:
             "Install Amphetamine Power Protect before you use Night or Travel."
-        case let .openLidBeforeSwitchingToWork(sourceMode):
-            switch sourceMode {
-            case .night:
-                "Night is keeping this closed Mac awake. Open the lid before you start Work."
-            case .travel:
-                "Travel is keeping this closed Mac awake. Open the lid before you start Work."
-            case .off, .work, .custom:
-                "Amphetamine is keeping this closed Mac awake. Open the lid before you start Work."
-            }
+        case let .openLidBeforeReplacingClosedDisplaySession(sourceMode, targetMode):
+            "\(sourceMode.closedDisplaySessionHolderName) is keeping this closed Mac awake. Open the lid before you start \(targetMode.displayName)."
         case let .screenLockStateUnavailable(message):
             message
         case let .displaySleepBlocked(processes):

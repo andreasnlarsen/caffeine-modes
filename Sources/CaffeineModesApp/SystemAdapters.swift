@@ -4,6 +4,7 @@ import CaffeineModesCore
 import CoreGraphics
 import Darwin
 import Foundation
+import IOKit.ps
 import IOKit.pwr_mgt
 import ServiceManagement
 
@@ -220,8 +221,53 @@ final class AmphetaminePowerProtectInspector: PowerProtectInspecting {
     }
 }
 
-final class IOKitLidStateInspector: LidStateInspecting {
-    func lidState() -> LidState {
+final class SystemClamshellContextInspector: ClamshellContextInspecting {
+    func currentContext() -> ClamshellContext {
+        let firstLidState = Self.lidState()
+        let externalPowerConnected = Self.externalPowerConnected()
+        let activeExternalDisplayPresent = Self.activeExternalDisplayPresent()
+        let secondLidState = Self.lidState()
+        return Self.stableContext(
+            firstLidState: firstLidState,
+            externalPowerConnected: externalPowerConnected,
+            activeExternalDisplayPresent: activeExternalDisplayPresent,
+            secondLidState: secondLidState
+        )
+    }
+
+    static func stableContext(
+        firstLidState: LidState,
+        externalPowerConnected: Bool?,
+        activeExternalDisplayPresent: Bool?,
+        secondLidState: LidState
+    ) -> ClamshellContext {
+        ClamshellContext(
+            lidState: firstLidState == secondLidState ? firstLidState : .unavailable,
+            externalPowerConnected: externalPowerConnected,
+            activeExternalDisplayPresent: activeExternalDisplayPresent
+        )
+    }
+
+    static func externalPowerConnected(sourceType: String) -> Bool? {
+        switch sourceType {
+        case kIOPMACPowerKey, kIOPMUPSPowerKey:
+            true
+        case kIOPMBatteryPowerKey:
+            false
+        default:
+            nil
+        }
+    }
+
+    static func isEligibleExternalDisplay(
+        isBuiltin: Bool,
+        isActive: Bool,
+        isAsleep: Bool
+    ) -> Bool {
+        !isBuiltin && isActive && !isAsleep
+    }
+
+    private static func lidState() -> LidState {
         let service = IOServiceGetMatchingService(
             kIOMainPortDefault,
             IOServiceMatching("IOPMrootDomain")
@@ -242,6 +288,32 @@ final class IOKitLidStateInspector: LidStateInspecting {
             return number.boolValue ? .closed : .open
         }
         return .unavailable
+    }
+
+    private static func externalPowerConnected() -> Bool? {
+        guard let unmanagedSnapshot = IOPSCopyPowerSourcesInfo() else { return nil }
+        let snapshot = unmanagedSnapshot.takeRetainedValue()
+        let sourceType = IOPSGetProvidingPowerSourceType(snapshot).takeUnretainedValue() as String
+        return externalPowerConnected(sourceType: sourceType)
+    }
+
+    private static func activeExternalDisplayPresent() -> Bool? {
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success else { return nil }
+        guard count > 0 else { return false }
+
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        var filledCount: UInt32 = 0
+        guard CGGetOnlineDisplayList(count, &displays, &filledCount) == .success else {
+            return nil
+        }
+        return displays.prefix(Int(filledCount)).contains { display in
+            isEligibleExternalDisplay(
+                isBuiltin: CGDisplayIsBuiltin(display) != 0,
+                isActive: CGDisplayIsActive(display) != 0,
+                isAsleep: CGDisplayIsAsleep(display) != 0
+            )
+        }
     }
 }
 

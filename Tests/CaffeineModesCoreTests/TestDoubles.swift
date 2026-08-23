@@ -172,17 +172,23 @@ final class FakePowerProtect: PowerProtectInspecting {
     }
 }
 
-final class FakeLidState: LidStateInspecting {
-    var state: LidState = .open
-    var queuedStates: [LidState] = []
+final class FakeClamshellContext: ClamshellContextInspecting {
+    var lidState: LidState = .open
+    var externalPowerConnected: Bool?
+    var activeExternalDisplayPresent: Bool?
+    var queuedContexts: [ClamshellContext] = []
     private(set) var callCount = 0
 
-    func lidState() -> LidState {
+    func currentContext() -> ClamshellContext {
         callCount += 1
-        if !queuedStates.isEmpty {
-            return queuedStates.removeFirst()
+        if !queuedContexts.isEmpty {
+            return queuedContexts.removeFirst()
         }
-        return state
+        return ClamshellContext(
+            lidState: lidState,
+            externalPowerConnected: externalPowerConnected,
+            activeExternalDisplayPresent: activeExternalDisplayPresent
+        )
     }
 }
 
@@ -221,7 +227,7 @@ struct Fixture {
     let screenLock = FakeScreenLock()
     let screenLockState = FakeScreenLockState()
     let powerProtect = FakePowerProtect()
-    let lidState = FakeLidState()
+    let clamshellContext = FakeClamshellContext()
     let display = FakeDisplay()
     let store = MemoryStore()
     let clock = FixedClock()
@@ -234,7 +240,7 @@ struct Fixture {
             screenLock: screenLock,
             screenLockState: screenLockState,
             powerProtect: powerProtect,
-            lidState: lidState,
+            clamshellContext: clamshellContext,
             display: display,
             store: store,
             clock: clock,

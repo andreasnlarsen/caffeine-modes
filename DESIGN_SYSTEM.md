@@ -114,7 +114,7 @@ Every symbol uses an accessibility description. No SF Symbol appears in the Find
 - Developer diagnostic: explicit confirmation, the one-minute bounded-session explanation with automatic expiry, and a warning that the timed start can replace a session that appears after the Off check. The confirmation never appears when the app already knows an active session prevents the diagnostic; the row states the Off precondition instead.
 - A failed Disable Triggers action or Developer diagnostic shows its exact failure reason in the row, not in a modal alert.
 - Transition error: native error alert with the exact blocking reason.
-- Work closed-lid stop: when an active closed-display session keeps a closed Mac awake, the error names the holder first — Night, Travel, or Amphetamine — then tells the user to open the lid before they start Work. Turning off the inactive closed-display default shows no alert.
+- Closed-lid replacement stop: when Work, Night, or Travel cannot safely replace an active closed-display session, the error names the current session and selected mode, then tells the user to open the lid. A closed Mac can switch directly when the app detects external power and an active external display. Normal macOS clamshell requirements still apply. Off stays available. Turning off an inactive closed-display default shows no alert.
 - About: warns that Night and Travel can create heat when the Mac is closed. Enclosed-bag use is unsupported.
 
 ## Application icon

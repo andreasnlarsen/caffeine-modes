@@ -26,6 +26,365 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
     }
 
+    func testEveryAuthorizedSourceTargetTransitionReachesSelectedMode() throws {
+        for source in TransitionMatrixSource.allCases {
+            for target in TransitionMatrixTarget.allCases {
+                let fixture = Fixture()
+                fixture.clamshellContext.lidState = .open
+                let sourceProjection = configureMatrixSource(source, fixture: fixture)
+                let priorOwnershipID = fixture.store.ownedSessionSignature?.id
+                let requestedMode = target.mode(now: fixture.clock.now)
+
+                let snapshot = try fixture.controller.transition(
+                    to: requestedMode,
+                    replacingActiveSession: true
+                )
+
+                let context = "\(source.rawValue) -> \(target.rawValue)"
+                XCTAssertEqual(snapshot.requestedMode.displayName, target.displayName, context)
+                XCTAssertEqual(
+                    snapshot.requestedMode.travelDurationMinutes,
+                    target.travelDurationMinutes,
+                    context
+                )
+                XCTAssertEqual(fixture.store.lastRequestedMode, snapshot.requestedMode, context)
+
+                switch target {
+                case .off:
+                    XCTAssertFalse(fixture.amphetamine.state.sessionIsActive, context)
+                    XCTAssertNil(fixture.store.ownedSessionSignature, context)
+                    XCTAssertEqual(fixture.display.sleepCount, 0, context)
+                case .work:
+                    XCTAssertTrue(fixture.amphetamine.state.sessionIsActive, context)
+                    XCTAssertFalse(fixture.amphetamine.state.displaySleepAllowed, context)
+                    XCTAssertFalse(fixture.amphetamine.state.closedDisplayModeEnabled, context)
+                    XCTAssertEqual(fixture.amphetamine.state.sessionTimeRemainingSeconds, 0, context)
+                    XCTAssertEqual(fixture.display.sleepCount, 0, context)
+                case .night:
+                    XCTAssertTrue(fixture.amphetamine.state.sessionIsActive, context)
+                    XCTAssertTrue(fixture.amphetamine.state.displaySleepAllowed, context)
+                    XCTAssertTrue(fixture.amphetamine.state.closedDisplayModeEnabled, context)
+                    XCTAssertEqual(fixture.amphetamine.state.sessionTimeRemainingSeconds, 0, context)
+                    XCTAssertEqual(fixture.display.sleepCount, 1, context)
+                case .travel:
+                    XCTAssertTrue(fixture.amphetamine.state.sessionIsActive, context)
+                    XCTAssertTrue(fixture.amphetamine.state.displaySleepAllowed, context)
+                    XCTAssertTrue(fixture.amphetamine.state.closedDisplayModeEnabled, context)
+                    XCTAssertEqual(
+                        fixture.amphetamine.state.sessionTimeRemainingSeconds,
+                        target.travelDurationMinutes.map { $0 * 60 },
+                        context
+                    )
+                    XCTAssertEqual(fixture.display.sleepCount, 1, context)
+                }
+
+                if target != .off {
+                    let marker = try XCTUnwrap(fixture.store.ownedSessionSignature, context)
+                    XCTAssertEqual(marker.mode.displayName, target.displayName, context)
+                    XCTAssertEqual(
+                        marker.mode.travelDurationMinutes,
+                        target.travelDurationMinutes,
+                        context
+                    )
+                    if let priorOwnershipID {
+                        XCTAssertNotEqual(marker.id, priorOwnershipID, context)
+                    }
+                }
+
+                if sourceProjection != .off {
+                    let endIndex = try XCTUnwrap(
+                        fixture.amphetamine.commands.firstIndex(of: "end"),
+                        context
+                    )
+                    if let startPrefix = target.startCommandPrefix {
+                        let startIndex = try XCTUnwrap(
+                            fixture.amphetamine.commands.firstIndex {
+                                $0.hasPrefix(startPrefix)
+                            },
+                            context
+                        )
+                        XCTAssertLessThan(endIndex, startIndex, context)
+                    }
+                } else {
+                    XCTAssertFalse(fixture.amphetamine.commands.contains("end"), context)
+                }
+            }
+        }
+    }
+
+    func testTravelCanReplaceItselfWithADifferentDuration() throws {
+        let fixture = Fixture()
+        fixture.clamshellContext.lidState = .open
+        _ = configureMatrixSource(.travel, fixture: fixture)
+
+        let snapshot = try fixture.controller.transition(
+            to: .travel(durationMinutes: 30, expiresAt: fixture.clock.now),
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 30)
+        XCTAssertEqual(fixture.amphetamine.state.sessionTimeRemainingSeconds, 30 * 60)
+        XCTAssertEqual(
+            fixture.amphetamine.commands,
+            ["read", "read", "end", "read", "startTimed:30:true", "closed:true", "read"]
+        )
+    }
+
+    func testClamshellContextTruthTable() {
+        let optionalFacts: [Bool?] = [nil, false, true]
+        for lidState in [LidState.open, .closed, .unavailable] {
+            for externalPowerConnected in optionalFacts {
+                for activeExternalDisplayPresent in optionalFacts {
+                    let context = ClamshellContext(
+                        lidState: lidState,
+                        externalPowerConnected: externalPowerConnected,
+                        activeExternalDisplayPresent: activeExternalDisplayPresent
+                    )
+                    let expected = lidState == .open
+                        || (lidState == .closed
+                            && externalPowerConnected == true
+                            && activeExternalDisplayPresent == true)
+                    XCTAssertEqual(
+                        context.permitsActiveClosedDisplaySessionReplacement,
+                        expected,
+                        "lid=\(lidState), power=\(String(describing: externalPowerConnected)), display=\(String(describing: activeExternalDisplayPresent))"
+                    )
+                }
+            }
+        }
+    }
+
+    func testClosedDisplayReplacementSucceedsForEverySourceAndTargetInSafeContexts() throws {
+        let safeContexts = [
+            ClamshellContext(
+                lidState: .open,
+                externalPowerConnected: nil,
+                activeExternalDisplayPresent: nil
+            ),
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: true,
+                activeExternalDisplayPresent: true
+            )
+        ]
+
+        for source in ClosedDisplayMatrixSource.allCases {
+            for target in TransitionMatrixTarget.activeCases {
+                for safeContext in safeContexts {
+                    let fixture = Fixture()
+                    let sourceMode = configureClosedDisplaySource(source, fixture: fixture)
+                    fixture.clamshellContext.lidState = safeContext.lidState
+                    fixture.clamshellContext.externalPowerConnected =
+                        safeContext.externalPowerConnected
+                    fixture.clamshellContext.activeExternalDisplayPresent =
+                        safeContext.activeExternalDisplayPresent
+
+                    let snapshot = try fixture.controller.transition(
+                        to: target.mode(now: fixture.clock.now),
+                        replacingActiveSession: true
+                    )
+
+                    let context = "\(source.rawValue) -> \(target.rawValue), \(safeContext)"
+                    XCTAssertEqual(snapshot.requestedMode.displayName, target.displayName, context)
+                    XCTAssertTrue(fixture.amphetamine.commands.contains("end"), context)
+                    XCTAssertEqual(fixture.clamshellContext.callCount, 2, context)
+                    XCTAssertNotEqual(sourceMode, .off, context)
+                }
+            }
+        }
+    }
+
+    func testClosedDisplayReplacementBlocksEveryUnsafeContextWithoutMutation() {
+        let optionalFacts: [Bool?] = [nil, false, true]
+        var unsafeContexts: [ClamshellContext] = []
+        for lidState in [LidState.closed, .unavailable] {
+            for externalPowerConnected in optionalFacts {
+                for activeExternalDisplayPresent in optionalFacts {
+                    let context = ClamshellContext(
+                        lidState: lidState,
+                        externalPowerConnected: externalPowerConnected,
+                        activeExternalDisplayPresent: activeExternalDisplayPresent
+                    )
+                    if !context.permitsActiveClosedDisplaySessionReplacement {
+                        unsafeContexts.append(context)
+                    }
+                }
+            }
+        }
+
+        for source in ClosedDisplayMatrixSource.allCases {
+            for target in TransitionMatrixTarget.activeCases {
+                for unsafeContext in unsafeContexts {
+                    let fixture = Fixture()
+                    let sourceMode = configureClosedDisplaySource(source, fixture: fixture)
+                    let priorSignature = fixture.store.ownedSessionSignature
+                    fixture.clamshellContext.lidState = unsafeContext.lidState
+                    fixture.clamshellContext.externalPowerConnected =
+                        unsafeContext.externalPowerConnected
+                    fixture.clamshellContext.activeExternalDisplayPresent =
+                        unsafeContext.activeExternalDisplayPresent
+                    let targetMode = target.mode(now: fixture.clock.now)
+
+                    XCTAssertThrowsError(
+                        try fixture.controller.transition(
+                            to: targetMode,
+                            replacingActiveSession: true
+                        ),
+                        "\(source.rawValue) -> \(target.rawValue), \(unsafeContext)"
+                    ) { error in
+                        XCTAssertEqual(
+                            error as? ModeControlError,
+                            .openLidBeforeReplacingClosedDisplaySession(
+                                from: sourceMode,
+                                to: targetMode
+                            )
+                        )
+                    }
+                    XCTAssertFalse(fixture.amphetamine.commands.contains("end"))
+                    XCTAssertFalse(
+                        fixture.amphetamine.commands.contains { $0.hasPrefix("start") }
+                    )
+                    XCTAssertEqual(fixture.store.ownedSessionSignature, priorSignature)
+                }
+            }
+        }
+    }
+
+    func testAwayReplacementRechecksClamshellContextImmediatelyBeforeEnd() {
+        let fixture = Fixture()
+        _ = configureClosedDisplaySource(.night, fixture: fixture)
+        fixture.clamshellContext.queuedContexts = [
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: true,
+                activeExternalDisplayPresent: true
+            ),
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: false,
+                activeExternalDisplayPresent: true
+            )
+        ]
+        let target = OperatingMode.travel(
+            durationMinutes: 90,
+            expiresAt: fixture.clock.now
+        )
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(to: target, replacingActiveSession: true)
+        ) { error in
+            XCTAssertEqual(
+                error as? ModeControlError,
+                .openLidBeforeReplacingClosedDisplaySession(from: .night, to: target)
+            )
+        }
+        XCTAssertEqual(fixture.clamshellContext.callCount, 2)
+        XCTAssertEqual(fixture.amphetamine.commands, ["read", "read"])
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertEqual(fixture.store.lastRequestedMode, .night)
+    }
+
+    @discardableResult
+    private func configureMatrixSource(
+        _ source: TransitionMatrixSource,
+        fixture: Fixture
+    ) -> OperatingMode {
+        switch source {
+        case .off:
+            fixture.amphetamine.state = .inactive
+            fixture.store.lastRequestedMode = .off
+            fixture.store.ownedSessionSignature = nil
+            return .off
+        case .work:
+            return configureOwnedSource(
+                .work,
+                state: AmphetamineState(
+                    sessionIsActive: true,
+                    displaySleepAllowed: false,
+                    closedDisplayModeEnabled: false,
+                    triggersEnabled: false
+                ),
+                fixture: fixture
+            )
+        case .night:
+            return configureClosedDisplaySource(.night, fixture: fixture)
+        case .travel:
+            return configureClosedDisplaySource(.travel, fixture: fixture)
+        case .custom:
+            fixture.amphetamine.state = AmphetamineState(
+                sessionIsActive: true,
+                displaySleepAllowed: false,
+                closedDisplayModeEnabled: false,
+                triggersEnabled: false
+            )
+            fixture.store.lastRequestedMode = .custom
+            fixture.store.ownedSessionSignature = nil
+            return .custom
+        }
+    }
+
+    @discardableResult
+    private func configureClosedDisplaySource(
+        _ source: ClosedDisplayMatrixSource,
+        fixture: Fixture
+    ) -> OperatingMode {
+        switch source {
+        case .night:
+            return configureOwnedSource(
+                .night,
+                state: AmphetamineState(
+                    sessionIsActive: true,
+                    displaySleepAllowed: true,
+                    closedDisplayModeEnabled: true,
+                    triggersEnabled: false
+                ),
+                fixture: fixture
+            )
+        case .travel:
+            let mode = OperatingMode.travel(
+                durationMinutes: 90,
+                expiresAt: fixture.clock.now.addingTimeInterval(90 * 60)
+            )
+            return configureOwnedSource(
+                mode,
+                state: AmphetamineState(
+                    sessionIsActive: true,
+                    displaySleepAllowed: true,
+                    closedDisplayModeEnabled: true,
+                    triggersEnabled: false,
+                    sessionTimeRemainingSeconds: 90 * 60
+                ),
+                fixture: fixture
+            )
+        case .custom:
+            fixture.amphetamine.state = AmphetamineState(
+                sessionIsActive: true,
+                displaySleepAllowed: true,
+                closedDisplayModeEnabled: true,
+                triggersEnabled: false
+            )
+            fixture.store.lastRequestedMode = .custom
+            fixture.store.ownedSessionSignature = nil
+            return .custom
+        }
+    }
+
+    @discardableResult
+    private func configureOwnedSource(
+        _ mode: OperatingMode,
+        state: AmphetamineState,
+        fixture: Fixture
+    ) -> OperatingMode {
+        fixture.amphetamine.state = state
+        fixture.store.lastRequestedMode = mode
+        fixture.store.ownedSessionSignature = OwnedSessionSignature(
+            mode: mode,
+            startedAt: fixture.clock.now,
+            expectedState: state
+        )
+        return mode
+    }
+
     func testWorkUsesFixedOrderAndVerifiesBeforeCommit() throws {
         let fixture = Fixture()
         let snapshot = try fixture.controller.transition(to: .work, replacingActiveSession: true)
@@ -70,7 +429,7 @@ final class ModeControllerTests: XCTestCase {
         for lidState in [LidState.closed, .unavailable] {
             let fixture = Fixture()
             fixture.amphetamine.state.closedDisplayModeEnabled = true
-            fixture.lidState.state = lidState
+            fixture.clamshellContext.lidState = lidState
 
             let snapshot = try fixture.controller.transition(
                 to: .work,
@@ -82,11 +441,11 @@ final class ModeControllerTests: XCTestCase {
                 fixture.amphetamine.commands,
                 ["read", "read", "closed:false", "read", "startInfinite:false", "read"]
             )
-            XCTAssertEqual(fixture.lidState.callCount, 0)
+            XCTAssertEqual(fixture.clamshellContext.callCount, 0)
         }
     }
 
-    func testWorkBlocksActiveClosedDisplaySessionWithClosedOrUnknownLidBeforeMutation() {
+    func testWorkBlocksActiveClosedDisplaySessionWithoutDetectedDirectSwitchConditionsBeforeMutation() {
         for lidState in [LidState.closed, .unavailable] {
             let fixture = Fixture()
             fixture.amphetamine.state = AmphetamineState(
@@ -95,14 +454,14 @@ final class ModeControllerTests: XCTestCase {
                 closedDisplayModeEnabled: true,
                 triggersEnabled: false
             )
-            fixture.lidState.state = lidState
+            fixture.clamshellContext.lidState = lidState
 
             XCTAssertThrowsError(
                 try fixture.controller.transition(to: .work, replacingActiveSession: true)
             ) { error in
                 XCTAssertEqual(
                     error as? ModeControlError,
-                    .openLidBeforeSwitchingToWork(from: .custom)
+                    .openLidBeforeReplacingClosedDisplaySession(from: .custom, to: .work)
                 )
             }
             XCTAssertEqual(fixture.amphetamine.commands, ["read", "read"])
@@ -110,7 +469,184 @@ final class ModeControllerTests: XCTestCase {
         }
     }
 
-    func testWorkRechecksLidImmediatelyBeforeEndingActiveClosedDisplaySession() {
+    func testClamshellContextPermitsOnlyOpenLidOrDetectedDirectSwitchConditions() {
+        XCTAssertTrue(
+            ClamshellContext(
+                lidState: .open,
+                externalPowerConnected: nil,
+                activeExternalDisplayPresent: nil
+            ).permitsActiveClosedDisplaySessionReplacement
+        )
+        XCTAssertTrue(
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: true,
+                activeExternalDisplayPresent: true
+            ).permitsActiveClosedDisplaySessionReplacement
+        )
+
+        for context in [
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: false,
+                activeExternalDisplayPresent: true
+            ),
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: true,
+                activeExternalDisplayPresent: false
+            ),
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: nil,
+                activeExternalDisplayPresent: true
+            ),
+            ClamshellContext(
+                lidState: .unavailable,
+                externalPowerConnected: true,
+                activeExternalDisplayPresent: true
+            )
+        ] {
+            XCTAssertFalse(context.permitsActiveClosedDisplaySessionReplacement)
+        }
+    }
+
+    func testWorkWithDetectedClosedLidSwitchConditionsStillRequiresReplacementConfirmation() {
+        let fixture = Fixture()
+        fixture.amphetamine.state = AmphetamineState(
+            sessionIsActive: true,
+            displaySleepAllowed: true,
+            closedDisplayModeEnabled: true,
+            triggersEnabled: false
+        )
+        fixture.clamshellContext.lidState = .closed
+        fixture.clamshellContext.externalPowerConnected = true
+        fixture.clamshellContext.activeExternalDisplayPresent = true
+
+        XCTAssertThrowsError(try fixture.controller.transition(to: .work)) { error in
+            XCTAssertEqual(error as? ModeControlError, .activeSessionRequiresConfirmation)
+        }
+        XCTAssertEqual(fixture.clamshellContext.callCount, 1)
+        XCTAssertEqual(fixture.amphetamine.commands, ["read", "read"])
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+    }
+
+    func testWorkReplacesOwnedNightWithDetectedClosedLidSwitchConditions() throws {
+        let fixture = Fixture()
+        fixture.amphetamine.state = AmphetamineState(
+            sessionIsActive: true,
+            displaySleepAllowed: true,
+            closedDisplayModeEnabled: true,
+            triggersEnabled: false
+        )
+        fixture.store.ownedSessionSignature = OwnedSessionSignature(
+            mode: .night,
+            startedAt: fixture.clock.now,
+            expectedState: fixture.amphetamine.state
+        )
+        fixture.store.lastRequestedMode = .night
+        fixture.clamshellContext.lidState = .closed
+        fixture.clamshellContext.externalPowerConnected = true
+        fixture.clamshellContext.activeExternalDisplayPresent = true
+
+        let snapshot = try fixture.controller.transition(
+            to: .work,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .work)
+        XCTAssertEqual(
+            fixture.amphetamine.commands,
+            ["read", "read", "end", "read", "startInfinite:false", "read"]
+        )
+        XCTAssertEqual(fixture.clamshellContext.callCount, 2)
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertFalse(fixture.amphetamine.state.displaySleepAllowed)
+        XCTAssertFalse(fixture.amphetamine.state.closedDisplayModeEnabled)
+    }
+
+    func testWorkReplacesOwnedTravelWithDetectedClosedLidSwitchConditions() throws {
+        let fixture = Fixture()
+        fixture.amphetamine.state = AmphetamineState(
+            sessionIsActive: true,
+            displaySleepAllowed: true,
+            closedDisplayModeEnabled: true,
+            triggersEnabled: false,
+            sessionTimeRemainingSeconds: 90 * 60
+        )
+        let travel = OperatingMode.travel(
+            durationMinutes: 90,
+            expiresAt: fixture.clock.now.addingTimeInterval(90 * 60)
+        )
+        fixture.store.ownedSessionSignature = OwnedSessionSignature(
+            mode: travel,
+            startedAt: fixture.clock.now,
+            expectedState: fixture.amphetamine.state
+        )
+        fixture.store.lastRequestedMode = travel
+        fixture.clamshellContext.lidState = .closed
+        fixture.clamshellContext.externalPowerConnected = true
+        fixture.clamshellContext.activeExternalDisplayPresent = true
+
+        let snapshot = try fixture.controller.transition(
+            to: .work,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .work)
+        XCTAssertEqual(
+            fixture.amphetamine.commands,
+            ["read", "read", "end", "read", "startInfinite:false", "read"]
+        )
+        XCTAssertEqual(fixture.clamshellContext.callCount, 2)
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertFalse(fixture.amphetamine.state.displaySleepAllowed)
+        XCTAssertFalse(fixture.amphetamine.state.closedDisplayModeEnabled)
+    }
+
+    func testWorkRechecksStandardClamshellBeforeEndingNight() {
+        let fixture = Fixture()
+        fixture.amphetamine.state = AmphetamineState(
+            sessionIsActive: true,
+            displaySleepAllowed: true,
+            closedDisplayModeEnabled: true,
+            triggersEnabled: false
+        )
+        fixture.store.ownedSessionSignature = OwnedSessionSignature(
+            mode: .night,
+            startedAt: fixture.clock.now,
+            expectedState: fixture.amphetamine.state
+        )
+        fixture.store.lastRequestedMode = .night
+        fixture.clamshellContext.queuedContexts = [
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: true,
+                activeExternalDisplayPresent: true
+            ),
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: false,
+                activeExternalDisplayPresent: false
+            )
+        ]
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(to: .work, replacingActiveSession: true)
+        ) { error in
+            XCTAssertEqual(
+                error as? ModeControlError,
+                .openLidBeforeReplacingClosedDisplaySession(from: .night, to: .work)
+            )
+        }
+        XCTAssertEqual(fixture.clamshellContext.callCount, 2)
+        XCTAssertEqual(fixture.amphetamine.commands, ["read", "read"])
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertEqual(fixture.store.lastRequestedMode, .night)
+        XCTAssertNotNil(fixture.store.ownedSessionSignature)
+    }
+
+    func testWorkRechecksClamshellContextImmediatelyBeforeEndingActiveClosedDisplaySession() {
         let fixture = Fixture()
         fixture.amphetamine.state = AmphetamineState(
             sessionIsActive: true,
@@ -123,17 +659,28 @@ final class ModeControllerTests: XCTestCase {
             startedAt: fixture.clock.now
         )
         fixture.store.lastRequestedMode = .night
-        fixture.lidState.queuedStates = [.open, .closed]
+        fixture.clamshellContext.queuedContexts = [
+            ClamshellContext(
+                lidState: .open,
+                externalPowerConnected: nil,
+                activeExternalDisplayPresent: nil
+            ),
+            ClamshellContext(
+                lidState: .closed,
+                externalPowerConnected: false,
+                activeExternalDisplayPresent: false
+            )
+        ]
 
         XCTAssertThrowsError(
             try fixture.controller.transition(to: .work, replacingActiveSession: true)
         ) { error in
             XCTAssertEqual(
                 error as? ModeControlError,
-                .openLidBeforeSwitchingToWork(from: .night)
+                .openLidBeforeReplacingClosedDisplaySession(from: .night, to: .work)
             )
         }
-        XCTAssertEqual(fixture.lidState.callCount, 2)
+        XCTAssertEqual(fixture.clamshellContext.callCount, 2)
         XCTAssertEqual(fixture.amphetamine.commands, ["read", "read"])
         XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
         XCTAssertEqual(fixture.store.lastRequestedMode, .night)
@@ -154,7 +701,7 @@ final class ModeControllerTests: XCTestCase {
             startedAt: fixture.clock.now
         )
         fixture.store.lastRequestedMode = .night
-        fixture.lidState.state = .closed
+        fixture.clamshellContext.lidState = .closed
         fixture.amphetamine.onRead = { count in
             guard count == 2 else { return }
             fixture.amphetamine.state.sessionTimeRemainingSeconds = 30 * 60
@@ -165,7 +712,7 @@ final class ModeControllerTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? ModeControlError,
-                .openLidBeforeSwitchingToWork(from: .custom)
+                .openLidBeforeReplacingClosedDisplaySession(from: .custom, to: .work)
             )
             XCTAssertEqual(
                 error.localizedDescription,
@@ -176,20 +723,27 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
     }
 
-    func testWorkClosedDisplaySafetyErrorsNameNightTravelAndCustom() {
+    func testClosedDisplaySafetyErrorsNameSourceAndTarget() {
         XCTAssertEqual(
-            ModeControlError.openLidBeforeSwitchingToWork(from: .night).errorDescription,
+            ModeControlError.openLidBeforeReplacingClosedDisplaySession(
+                from: .night,
+                to: .work
+            ).errorDescription,
             "Night is keeping this closed Mac awake. Open the lid before you start Work."
         )
         XCTAssertEqual(
-            ModeControlError.openLidBeforeSwitchingToWork(
-                from: .travel(durationMinutes: 90, expiresAt: .distantFuture)
+            ModeControlError.openLidBeforeReplacingClosedDisplaySession(
+                from: .travel(durationMinutes: 90, expiresAt: .distantFuture),
+                to: .night
             ).errorDescription,
-            "Travel is keeping this closed Mac awake. Open the lid before you start Work."
+            "Travel is keeping this closed Mac awake. Open the lid before you start Night."
         )
         XCTAssertEqual(
-            ModeControlError.openLidBeforeSwitchingToWork(from: .custom).errorDescription,
-            "Amphetamine is keeping this closed Mac awake. Open the lid before you start Work."
+            ModeControlError.openLidBeforeReplacingClosedDisplaySession(
+                from: .custom,
+                to: .travel(durationMinutes: 90, expiresAt: .distantFuture)
+            ).errorDescription,
+            "Amphetamine is keeping this closed Mac awake. Open the lid before you start Travel."
         )
     }
 
@@ -202,7 +756,7 @@ final class ModeControllerTests: XCTestCase {
             closedDisplayModeEnabled: false,
             triggersEnabled: false
         )
-        fixture.lidState.state = .closed
+        fixture.clamshellContext.lidState = .closed
 
         let snapshot = try fixture.controller.transition(
             to: .work,
@@ -214,7 +768,7 @@ final class ModeControllerTests: XCTestCase {
             fixture.amphetamine.commands,
             ["read", "read", "end", "read", "closed:false", "read", "startInfinite:false", "read"]
         )
-        XCTAssertEqual(fixture.lidState.callCount, 0)
+        XCTAssertEqual(fixture.clamshellContext.callCount, 0)
     }
 
     func testWorkReplacesActiveClosedDisplaySessionWhenLidStaysOpen() throws {
@@ -226,7 +780,18 @@ final class ModeControllerTests: XCTestCase {
             closedDisplayModeEnabled: true,
             triggersEnabled: false
         )
-        fixture.lidState.queuedStates = [.open, .open]
+        fixture.clamshellContext.queuedContexts = [
+            ClamshellContext(
+                lidState: .open,
+                externalPowerConnected: nil,
+                activeExternalDisplayPresent: nil
+            ),
+            ClamshellContext(
+                lidState: .open,
+                externalPowerConnected: nil,
+                activeExternalDisplayPresent: nil
+            )
+        ]
 
         let snapshot = try fixture.controller.transition(
             to: .work,
@@ -238,7 +803,7 @@ final class ModeControllerTests: XCTestCase {
             fixture.amphetamine.commands,
             ["read", "read", "end", "read", "closed:false", "read", "startInfinite:false", "read"]
         )
-        XCTAssertEqual(fixture.lidState.callCount, 2)
+        XCTAssertEqual(fixture.clamshellContext.callCount, 2)
         XCTAssertFalse(fixture.amphetamine.state.closedDisplayModeEnabled)
         XCTAssertFalse(fixture.amphetamine.inactiveClosedDisplayDefaultEnabled)
     }
@@ -251,7 +816,7 @@ final class ModeControllerTests: XCTestCase {
             closedDisplayModeEnabled: true,
             triggersEnabled: false
         )
-        fixture.lidState.state = .closed
+        fixture.clamshellContext.lidState = .closed
 
         let snapshot = try fixture.controller.transition(
             to: .off,
@@ -260,7 +825,7 @@ final class ModeControllerTests: XCTestCase {
 
         XCTAssertEqual(snapshot.requestedMode, .off)
         XCTAssertEqual(fixture.amphetamine.commands, ["read", "read", "end", "read"])
-        XCTAssertEqual(fixture.lidState.callCount, 0)
+        XCTAssertEqual(fixture.clamshellContext.callCount, 0)
         XCTAssertFalse(fixture.amphetamine.state.sessionIsActive)
     }
 
@@ -377,7 +942,7 @@ final class ModeControllerTests: XCTestCase {
     func testNightStartsWithClosedLidWhenClosedDisplayModeIsAlreadyEnabled() throws {
         let fixture = Fixture()
         fixture.amphetamine.state.closedDisplayModeEnabled = true
-        fixture.lidState.state = .closed
+        fixture.clamshellContext.lidState = .closed
 
         let snapshot = try fixture.controller.transition(to: .night, replacingActiveSession: true)
 
@@ -404,7 +969,9 @@ final class ModeControllerTests: XCTestCase {
             expectedState: fixture.amphetamine.state
         )
         fixture.store.lastRequestedMode = .night
-        fixture.lidState.state = .closed
+        fixture.clamshellContext.lidState = .closed
+        fixture.clamshellContext.externalPowerConnected = true
+        fixture.clamshellContext.activeExternalDisplayPresent = true
 
         let requested = OperatingMode.travel(durationMinutes: 90, expiresAt: .distantPast)
         let snapshot = try fixture.controller.transition(
@@ -419,6 +986,7 @@ final class ModeControllerTests: XCTestCase {
         )
         XCTAssertFalse(fixture.amphetamine.commands.contains("closed:false"))
         XCTAssertEqual(fixture.display.sleepCount, 1)
+        XCTAssertEqual(fixture.clamshellContext.callCount, 2)
     }
 
     func testNightFailsClosedWhenScreenLockIsNotImmediate() {
@@ -1578,6 +2146,60 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 30)
         XCTAssertEqual(fixture.display.sleepCount, sleepCount)
         XCTAssertEqual(fixture.screenLockState.callCount, 0)
+    }
+}
+
+private enum TransitionMatrixSource: String, CaseIterable {
+    case off
+    case work
+    case night
+    case travel
+    case custom
+}
+
+private enum ClosedDisplayMatrixSource: String, CaseIterable {
+    case night
+    case travel
+    case custom
+}
+
+private enum TransitionMatrixTarget: String, CaseIterable {
+    case off
+    case work
+    case night
+    case travel
+
+    static let activeCases: [TransitionMatrixTarget] = [.work, .night, .travel]
+
+    var displayName: String {
+        switch self {
+        case .off: "Off"
+        case .work: "Work"
+        case .night: "Night"
+        case .travel: "Travel"
+        }
+    }
+
+    var travelDurationMinutes: Int? {
+        self == .travel ? 90 : nil
+    }
+
+    var startCommandPrefix: String? {
+        switch self {
+        case .off: nil
+        case .work: "startInfinite:false"
+        case .night: "startInfinite:true"
+        case .travel: "startTimed:90:true"
+        }
+    }
+
+    func mode(now: Date) -> OperatingMode {
+        switch self {
+        case .off: .off
+        case .work: .work
+        case .night: .night
+        case .travel: .travel(durationMinutes: 90, expiresAt: now)
+        }
     }
 }
 

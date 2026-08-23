@@ -6,7 +6,7 @@ public final class ModeController: ModeControlling {
     private let screenLock: ScreenLockPolicyChecking
     private let screenLockState: ScreenLockStateInspecting
     private let powerProtect: PowerProtectInspecting
-    private let lidState: LidStateInspecting
+    private let clamshellContext: ClamshellContextInspecting
     private let display: DisplaySleeping
     private let store: ModeStateStoring
     private let clock: TimeProviding
@@ -26,7 +26,7 @@ public final class ModeController: ModeControlling {
         screenLock: ScreenLockPolicyChecking,
         screenLockState: ScreenLockStateInspecting,
         powerProtect: PowerProtectInspecting,
-        lidState: LidStateInspecting,
+        clamshellContext: ClamshellContextInspecting,
         display: DisplaySleeping,
         store: ModeStateStoring,
         clock: TimeProviding = SystemTimeProvider(),
@@ -39,7 +39,7 @@ public final class ModeController: ModeControlling {
         self.screenLock = screenLock
         self.screenLockState = screenLockState
         self.powerProtect = powerProtect
-        self.lidState = lidState
+        self.clamshellContext = clamshellContext
         self.display = display
         self.store = store
         self.clock = clock
@@ -165,10 +165,11 @@ public final class ModeController: ModeControlling {
         let preflightSourceMode = preflightMatchesStoredSignature
             ? before.requestedMode
             : .custom
-        if mode == .work {
-            try requireOpenLidBeforeReplacingActiveClosedDisplaySession(
+        if mode != .off {
+            try requireSafeContextBeforeReplacingActiveClosedDisplaySession(
                 preflightState,
-                sourceMode: preflightSourceMode
+                sourceMode: preflightSourceMode,
+                targetMode: mode
             )
         }
         if preflightState.sessionIsActive, !replacingActiveSession {
@@ -188,12 +189,11 @@ public final class ModeController: ModeControlling {
         do {
             var startState = preflightState
             if targetMode != .off, startState.sessionIsActive {
-                if targetMode == .work {
-                    try requireOpenLidBeforeReplacingActiveClosedDisplaySession(
-                        startState,
-                        sourceMode: preflightSourceMode
-                    )
-                }
+                try requireSafeContextBeforeReplacingActiveClosedDisplaySession(
+                    startState,
+                    sourceMode: preflightSourceMode,
+                    targetMode: targetMode
+                )
                 preStartMutationWasAttempted = true
                 try endAmphetamineSession(deadline: deadline)
                 startState = try readAmphetamineState(deadline: deadline)
@@ -322,7 +322,7 @@ public final class ModeController: ModeControlling {
                !sessionStartWasAttempted,
                let modeError = error as? ModeControlError {
                 switch modeError {
-                case .openLidBeforeSwitchingToWork:
+                case .openLidBeforeReplacingClosedDisplaySession:
                     throw modeError
                 default:
                     break
@@ -731,15 +731,19 @@ public final class ModeController: ModeControlling {
         return observed
     }
 
-    private func requireOpenLidBeforeReplacingActiveClosedDisplaySession(
+    private func requireSafeContextBeforeReplacingActiveClosedDisplaySession(
         _ state: AmphetamineState,
-        sourceMode: OperatingMode
+        sourceMode: OperatingMode,
+        targetMode: OperatingMode
     ) throws {
         guard case .activeSession(enabled: true) = state.closedDisplayPolicy else {
             return
         }
-        guard lidState.lidState() == .open else {
-            throw ModeControlError.openLidBeforeSwitchingToWork(from: sourceMode)
+        guard clamshellContext.currentContext().permitsActiveClosedDisplaySessionReplacement else {
+            throw ModeControlError.openLidBeforeReplacingClosedDisplaySession(
+                from: sourceMode,
+                to: targetMode
+            )
         }
     }
 

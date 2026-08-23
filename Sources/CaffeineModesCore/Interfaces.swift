@@ -28,8 +28,8 @@ public protocol PowerProtectInspecting: AnyObject {
     func inspect() -> PowerProtectStatus
 }
 
-public protocol LidStateInspecting: AnyObject {
-    func lidState() -> LidState
+public protocol ClamshellContextInspecting: AnyObject {
+    func currentContext() -> ClamshellContext
 }
 
 public protocol DisplaySleeping: AnyObject {

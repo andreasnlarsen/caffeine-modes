@@ -110,11 +110,22 @@ case "$requirement" in
         rg -q 'mutationRecoveryReserve: TimeInterval = 0.5' "$project_root/Sources/CaffeineModesCore/ModeController.swift"
         rg -q 'testWorkNeverChangesClosedDisplayModeAfterSessionStart' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testWorkNormalizesInactiveClosedDisplayDefaultWithClosedOrUnknownLid' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
-        rg -q 'testWorkBlocksActiveClosedDisplaySessionWithClosedOrUnknownLidBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
-        rg -q 'testWorkRechecksLidImmediatelyBeforeEndingActiveClosedDisplaySession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkBlocksActiveClosedDisplaySessionWithoutDetectedDirectSwitchConditionsBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkReplacesOwnedNightWithDetectedClosedLidSwitchConditions' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkReplacesOwnedTravelWithDetectedClosedLidSwitchConditions' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkRechecksClamshellContextImmediatelyBeforeEndingActiveClosedDisplaySession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkRechecksStandardClamshellBeforeEndingNight' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testEveryAuthorizedSourceTargetTransitionReachesSelectedMode' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testClamshellContextTruthTable' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testClosedDisplayReplacementSucceedsForEverySourceAndTargetInSafeContexts' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testClosedDisplayReplacementBlocksEveryUnsafeContextWithoutMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testAwayReplacementRechecksClamshellContextImmediatelyBeforeEnd' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testPowerSourceMappingDistinguishesExternalBatteryAndUnknown' "$project_root/Tests/CaffeineModesCoreTests/SystemClamshellContextInspectorTests.swift"
+        rg -q 'testOnlyActiveAwakeNonBuiltinDisplayIsEligible' "$project_root/Tests/CaffeineModesCoreTests/SystemClamshellContextInspectorTests.swift"
+        rg -q 'testStableContextFailsClosedWhenLidChangesDuringRead' "$project_root/Tests/CaffeineModesCoreTests/SystemClamshellContextInspectorTests.swift"
         rg -q 'testUnlockNeverMutatesUnownedCustomSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -Fq 'with timeout of \(timeoutLiteral) seconds' "$project_root/Sources/CaffeineModesApp/AmphetamineClient.swift"
-        run_tests 'ModeControllerTests|ApplicationCoordinatorTests|SetupAndVersionTests/testReadiness.*Mutation'
+        run_tests 'ModeControllerTests|SystemClamshellContextInspectorTests|ApplicationCoordinatorTests|SetupAndVersionTests/testReadiness.*Mutation'
         ;;
     REQ-007)
         rg -q 'NSStatusBar.system.statusItem' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
