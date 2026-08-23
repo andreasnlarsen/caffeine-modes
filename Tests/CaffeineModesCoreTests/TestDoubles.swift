@@ -137,6 +137,34 @@ final class FakeScreenLock: ScreenLockPolicyChecking {
     }
 }
 
+final class FakeScreenLockState: ScreenLockStateInspecting {
+    var isLocked = true
+    var error: Error?
+    var callCount = 0
+
+    func screenIsLocked() throws -> Bool {
+        callCount += 1
+        if let error { throw error }
+        return isLocked
+    }
+}
+
+final class FakePowerProtect: PowerProtectInspecting {
+    var status = PowerProtectStatus(isRequired: true, isInstalled: true)
+
+    func inspect() -> PowerProtectStatus {
+        status
+    }
+}
+
+final class FakeLidState: LidStateInspecting {
+    var state: LidState = .open
+
+    func lidState() -> LidState {
+        state
+    }
+}
+
 final class FakeDisplay: DisplaySleeping {
     var sleepCount = 0
     var error: Error?
@@ -154,6 +182,7 @@ final class MemoryStore: ModeStateStoring {
     var ownedSessionSignature: OwnedSessionSignature?
     var closedDisplayReadinessPassed = true
     var launchAtLoginPromptWasShown = false
+    var postUnlockMode: PostUnlockMode = .off
 }
 
 final class FixedClock: TimeProviding {
@@ -169,6 +198,9 @@ struct Fixture {
     let amphetamine = FakeAmphetamine()
     let assertions = FakeAssertions()
     let screenLock = FakeScreenLock()
+    let screenLockState = FakeScreenLockState()
+    let powerProtect = FakePowerProtect()
+    let lidState = FakeLidState()
     let display = FakeDisplay()
     let store = MemoryStore()
     let clock = FixedClock()
@@ -179,6 +211,9 @@ struct Fixture {
             amphetamine: amphetamine,
             assertions: assertions,
             screenLock: screenLock,
+            screenLockState: screenLockState,
+            powerProtect: powerProtect,
+            lidState: lidState,
             display: display,
             store: store,
             clock: clock,

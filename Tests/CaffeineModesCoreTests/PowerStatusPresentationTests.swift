@@ -65,9 +65,20 @@ final class PowerStatusPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.statusLine,
-            "Off · Display and automatic sleep follow macOS settings"
+            "Off · Follows macOS"
         )
         XCTAssertTrue(presentation.toolTip.contains("Disk idle sleep: blocked by backupd."))
+    }
+
+    func testModeStatusUsesShortUserFacingOutcomes() {
+        XCTAssertEqual(
+            PowerStatusPresentation.make(mode: .work, report: .empty).statusLine,
+            "Work · Mac and displays stay awake"
+        )
+        XCTAssertEqual(
+            PowerStatusPresentation.make(mode: .night, report: .empty).statusLine,
+            "Night · Mac working while locked"
+        )
     }
 
     func testNightSurfacesDisplayBlockerThatAppearsAfterTransition() {
@@ -78,7 +89,7 @@ final class PowerStatusPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.statusLine,
-            "Night · Display kept on by Raycast · Runs with lid closed"
+            "Night · Display kept on by Raycast"
         )
         XCTAssertTrue(presentation.hasUnexpectedDisplayBlocker)
     }
@@ -92,7 +103,7 @@ final class PowerStatusPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.statusLine,
-            "Travel · 1h 30m remaining · Display sleeps · Runs with lid closed"
+            "Travel · 1h 30m left · Mac working while locked"
         )
         XCTAssertFalse(presentation.hasUnexpectedDisplayBlocker)
     }
@@ -106,7 +117,7 @@ final class PowerStatusPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.statusLine,
-            "Travel · 1h 30m remaining · Display kept on by Raycast · Runs with lid closed"
+            "Travel · 1h 30m left · Display kept on by Raycast"
         )
         XCTAssertTrue(presentation.hasUnexpectedDisplayBlocker)
     }
@@ -120,7 +131,7 @@ final class PowerStatusPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.statusLine,
-            "Travel · 1h 30m remaining · Display status unavailable · Runs with lid closed"
+            "Travel · 1h 30m left · Display status unavailable"
         )
         XCTAssertTrue(presentation.hasInspectionError)
     }

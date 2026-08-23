@@ -105,6 +105,521 @@ final class ApplicationCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.finish())
     }
 
+    func testPostUnlockChoiceWaitsForBusyWorkThenPresentsOnce() {
+        var state = PostUnlockChoiceState()
+        let ownershipID = UUID()
+        var preparationCount = 0
+
+        state.request(for: ownershipID)
+
+        XCTAssertEqual(state.activeOwnershipID, ownershipID)
+        XCTAssertNil(
+            state.presentationIfReady(
+                isBusy: true,
+                prepareForPresentation: { preparationCount += 1 }
+            )
+        )
+        XCTAssertEqual(
+            state.presentationIfReady(
+                isBusy: false,
+                prepareForPresentation: { preparationCount += 1 }
+            ),
+            ownershipID
+        )
+        XCTAssertNil(
+            state.presentationIfReady(
+                isBusy: false,
+                prepareForPresentation: { preparationCount += 1 }
+            )
+        )
+        XCTAssertEqual(preparationCount, 1)
+    }
+
+    func testPostUnlockChoiceClearsAfterCancelOrModeChange() {
+        var state = PostUnlockChoiceState()
+        let ownershipID = UUID()
+
+        state.request(for: ownershipID)
+        XCTAssertEqual(state.presentationIfReady(isBusy: false), ownershipID)
+        state.cancelPresentation(for: ownershipID)
+        XCTAssertNil(state.activeOwnershipID)
+
+        state.request(for: ownershipID)
+        state.modeDidChange(awayOwnershipID: UUID())
+        XCTAssertNil(state.activeOwnershipID)
+    }
+
+    func testPostUnlockTransitionFailureKeepsWarningUntilAnotherEventRetries() {
+        var state = PostUnlockChoiceState()
+        let ownershipID = UUID()
+
+        state.request(for: ownershipID)
+        XCTAssertEqual(state.presentationIfReady(isBusy: false), ownershipID)
+
+        state.transitionFailed(for: ownershipID)
+
+        XCTAssertEqual(state.activeOwnershipID, ownershipID)
+        XCTAssertNil(state.presentationIfReady(isBusy: false))
+
+        state.request(for: ownershipID)
+        XCTAssertEqual(state.presentationIfReady(isBusy: false), ownershipID)
+    }
+
+    func testPostUnlockPresentationWaitsForEveryModalSource() {
+        XCTAssertFalse(
+            PostUnlockPresentationPolicy.isBusy(
+                setupIsBusy: false,
+                transitionIsInProgress: false,
+                modalWindowIsOpen: false
+            )
+        )
+        XCTAssertTrue(
+            PostUnlockPresentationPolicy.isBusy(
+                setupIsBusy: true,
+                transitionIsInProgress: false,
+                modalWindowIsOpen: false
+            )
+        )
+        XCTAssertTrue(
+            PostUnlockPresentationPolicy.isBusy(
+                setupIsBusy: false,
+                transitionIsInProgress: true,
+                modalWindowIsOpen: false
+            )
+        )
+        XCTAssertTrue(
+            PostUnlockPresentationPolicy.isBusy(
+                setupIsBusy: false,
+                transitionIsInProgress: false,
+                modalWindowIsOpen: true
+            )
+        )
+    }
+
+    func testScreenLifecycleActivityRejectsOverlappingWorkAndReportsBusy() {
+        var activity = ScreenLifecycleActivity()
+
+        XCTAssertTrue(activity.begin())
+        XCTAssertTrue(activity.isBusy)
+        XCTAssertFalse(activity.begin())
+
+        XCTAssertEqual(activity.finishOtherWork(awayModeIsActive: false), .none)
+        XCTAssertFalse(activity.isBusy)
+        XCTAssertTrue(activity.begin())
+    }
+
+    func testScreenLifecycleActivityQueuesUnlockCheckDuringOtherWork() {
+        var activity = ScreenLifecycleActivity()
+
+        XCTAssertTrue(activity.begin())
+        XCTAssertFalse(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishOtherWork(awayModeIsActive: true),
+            .checkUnlockNow
+        )
+        XCTAssertFalse(activity.isBusy)
+        XCTAssertTrue(activity.requestUnlockCheck())
+    }
+
+    func testVerifiedUnlockClearsQueuedLifecycleWork() {
+        var activity = ScreenLifecycleActivity()
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertFalse(activity.requestUnlockCheck())
+        XCTAssertFalse(activity.requestResleep())
+
+        activity.verifiedUnlockObserved()
+
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: true, awayModeIsActive: true),
+            .none
+        )
+        XCTAssertFalse(activity.isBusy)
+    }
+
+    func testScreenLifecycleActivityQueuesResleepDuringUnlockCheck() {
+        var activity = ScreenLifecycleActivity()
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertFalse(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: true, awayModeIsActive: true),
+            .resleepNow
+        )
+        XCTAssertFalse(activity.isBusy)
+        XCTAssertTrue(activity.requestResleep())
+    }
+
+    func testScreenLifecycleActivityRetriesFailedResleepOnlyOnce() {
+        var activity = ScreenLifecycleActivity(maximumResleepRetries: 1)
+
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .none
+        )
+    }
+
+    func testScreenLifecycleActivityClearsResleepRetryWhenAwayModeEnds() {
+        var activity = ScreenLifecycleActivity(maximumResleepRetries: 1)
+
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+        activity.modeDidChange(awayModeIsActive: false)
+
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+    }
+
+    func testScreenLifecycleActivityClearsResleepRetryAfterSuccess() {
+        var activity = ScreenLifecycleActivity(maximumResleepRetries: 1)
+
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: true, awayModeIsActive: true),
+            .none
+        )
+
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+    }
+
+    func testScreenLifecycleActivityResetsRetryBudgetsForNewDisplayEvent() {
+        var activity = ScreenLifecycleActivity(
+            maximumUnlockRetries: 1,
+            maximumResleepRetries: 1
+        )
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+            .retryUnlockAfterDelay
+        )
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+            .none
+        )
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .none
+        )
+
+        activity.beginDisplayVisibilityEvent()
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+            .retryUnlockAfterDelay
+        )
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+    }
+
+    func testScreenLifecycleActivityResetsOnlyUnlockBudgetForNewUnlockEvent() {
+        var activity = ScreenLifecycleActivity(
+            maximumUnlockRetries: 1,
+            maximumResleepRetries: 1
+        )
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+            .retryUnlockAfterDelay
+        )
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+            .none
+        )
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .retryResleepAfterDelay
+        )
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .none
+        )
+
+        activity.beginUnlockEvent()
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+            .retryUnlockAfterDelay
+        )
+        XCTAssertTrue(activity.requestResleep())
+        XCTAssertEqual(
+            activity.finishResleep(succeeded: false, awayModeIsActive: true),
+            .none
+        )
+    }
+
+    func testScreenLifecycleActivityBoundsFailedUnlockRetries() {
+        var activity = ScreenLifecycleActivity(maximumUnlockRetries: 2)
+
+        for _ in 0..<2 {
+            XCTAssertTrue(activity.requestUnlockCheck())
+            XCTAssertEqual(
+                activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+                .retryUnlockAfterDelay
+            )
+        }
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: false, awayModeIsActive: true),
+            .none
+        )
+    }
+
+    func testScreenLifecycleActivityClearsQueuedUnlockWhenAwayModeEnds() {
+        var activity = ScreenLifecycleActivity()
+
+        XCTAssertTrue(activity.begin())
+        XCTAssertFalse(activity.requestUnlockCheck())
+        activity.modeDidChange(awayModeIsActive: false)
+
+        XCTAssertEqual(activity.finishOtherWork(awayModeIsActive: false), .none)
+    }
+
+    func testScreenLifecycleActivityClearsQueuedResleepWhenAwayModeEnds() {
+        var activity = ScreenLifecycleActivity()
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertFalse(activity.requestResleep())
+        activity.modeDidChange(awayModeIsActive: false)
+
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: true, awayModeIsActive: false),
+            .none
+        )
+    }
+
+    func testScreenLifecycleActivityClearsOldQueuedWorkWhenAwayOwnershipChanges() {
+        var activity = ScreenLifecycleActivity()
+
+        XCTAssertTrue(activity.requestUnlockCheck())
+        XCTAssertFalse(activity.requestResleep())
+        activity.modeDidChange(awayModeIsActive: true, identityChanged: true)
+
+        XCTAssertEqual(
+            activity.finishUnlockCheck(succeeded: true, awayModeIsActive: true),
+            .none
+        )
+    }
+
+    func testLifecyclePolicyPreservesTransientFailuresAndRetiresConfirmedProjectionLoss() {
+        let healthy = Self.snapshot(.night)
+        let transientFailure = ModeSnapshot(
+            requestedMode: .custom,
+            observedState: nil,
+            ownershipMarker: nil,
+            health: .backendMismatch,
+            detail: "Temporary read failure"
+        )
+        let confirmedProjectionLoss = ModeSnapshot(
+            requestedMode: .custom,
+            observedState: .inactive,
+            ownershipMarker: nil,
+            health: .conflicted,
+            detail: "Amphetamine changed outside Caffeine Modes"
+        )
+
+        XCTAssertTrue(LifecycleObservationPolicy.accepts(healthy))
+        XCTAssertFalse(LifecycleObservationPolicy.accepts(transientFailure))
+        XCTAssertTrue(LifecycleObservationPolicy.accepts(confirmedProjectionLoss))
+    }
+
+    func testLifecycleErrorIsShownBeforeHealthyRefreshClearsIt() {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = LifecycleErrorState()
+        state.record("Unlock failed", at: started)
+
+        state.refresh(
+            snapshot: Self.snapshot(.off),
+            report: .empty,
+            now: started.addingTimeInterval(30)
+        )
+        XCTAssertEqual(state.message, "Unlock failed")
+
+        state.markPresented()
+        state.refresh(
+            snapshot: Self.snapshot(.off),
+            report: .empty,
+            now: started.addingTimeInterval(4)
+        )
+        XCTAssertEqual(state.message, "Unlock failed")
+
+        state.refresh(
+            snapshot: Self.snapshot(.off),
+            report: .empty,
+            now: started.addingTimeInterval(5)
+        )
+        XCTAssertNil(state.message)
+    }
+
+    func testSuccessfulLifecycleCompletionDoesNotClearRecentFailure() {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = LifecycleErrorState()
+        state.recordFailure("Work could not start", at: started)
+
+        state.recordFailure(nil, at: started.addingTimeInterval(1))
+
+        XCTAssertEqual(state.message, "Work could not start")
+    }
+
+    func testLifecycleErrorStaysVisibleWhileAwayDisplayIsStillBlocked() {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = LifecycleErrorState()
+        state.record("Display sleep is blocked", at: started)
+        state.markPresented()
+
+        state.refresh(
+            snapshot: Self.snapshot(.night),
+            report: PowerAssertionReport(displaySleepBlockingProcesses: ["Raycast"]),
+            now: started.addingTimeInterval(30)
+        )
+        XCTAssertEqual(state.message, "Display sleep is blocked")
+
+        state.refresh(
+            snapshot: Self.snapshot(.night),
+            report: .empty,
+            now: started.addingTimeInterval(31)
+        )
+        XCTAssertNil(state.message)
+    }
+
+    func testLockStateErrorStaysVisibleUntilALifecycleCheckSucceeds() {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = LifecycleErrorState()
+        state.record(
+            "macOS did not return the current lock state.",
+            at: started,
+            requiresSuccessfulLifecycleCheck: true
+        )
+        state.markPresented()
+
+        state.refresh(
+            snapshot: Self.snapshot(.night),
+            report: .empty,
+            now: started.addingTimeInterval(30)
+        )
+        XCTAssertNotNil(state.message)
+
+        state.noteSuccessfulLifecycleCheck()
+        state.refresh(
+            snapshot: Self.snapshot(.night),
+            report: .empty,
+            now: started.addingTimeInterval(31)
+        )
+        XCTAssertNil(state.message)
+    }
+
+    func testLockStateErrorRetiresAfterTravelExpiresToOff() {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = LifecycleErrorState()
+        state.record(
+            "macOS did not return the current lock state.",
+            at: started,
+            requiresSuccessfulLifecycleCheck: true
+        )
+        state.markPresented()
+
+        state.refresh(
+            snapshot: Self.snapshot(.off),
+            report: .empty,
+            now: started.addingTimeInterval(30)
+        )
+
+        XCTAssertNil(state.message)
+    }
+
+    func testResleepFailureStaysVisibleUntilResleepSucceeds() {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = LifecycleErrorState()
+        state.record(
+            "Display sleep is blocked",
+            at: started,
+            requiresSuccessfulResleep: true
+        )
+        state.markPresented()
+
+        state.refresh(
+            snapshot: Self.snapshot(.night),
+            report: .empty,
+            now: started.addingTimeInterval(30)
+        )
+        XCTAssertNotNil(state.message)
+
+        state.noteSuccessfulLifecycleCheck()
+        state.refresh(
+            snapshot: Self.snapshot(.night),
+            report: .empty,
+            now: started.addingTimeInterval(31)
+        )
+        XCTAssertNotNil(state.message)
+
+        state.noteSuccessfulResleep()
+        state.refresh(
+            snapshot: Self.snapshot(.night),
+            report: .empty,
+            now: started.addingTimeInterval(32)
+        )
+        XCTAssertNil(state.message)
+    }
+
+    func testLifecycleErrorRetiresAfterConfirmedOwnershipConflict() {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = LifecycleErrorState()
+        state.record("Display sleep is blocked", at: started)
+        state.markPresented()
+
+        state.refresh(
+            snapshot: ModeSnapshot(
+                requestedMode: .custom,
+                observedState: .inactive,
+                ownershipMarker: nil,
+                health: .conflicted,
+                detail: "Amphetamine changed outside Caffeine Modes"
+            ),
+            report: .empty,
+            now: started.addingTimeInterval(30)
+        )
+
+        XCTAssertNil(state.message)
+    }
+
     func testStartConfirmationCancelDoesNotRetryTransition() async throws {
         var authorizations: [Bool] = []
         var confirmations: [ModeSelectionConfirmation] = []
@@ -191,7 +706,7 @@ final class ApplicationCoordinatorTests: XCTestCase {
         let night = ModeSelectionConfirmation.replaceActiveSession(.night).presentation
         XCTAssertTrue(night.title.contains("Night"))
         XCTAssertTrue(night.message.contains("Night"))
-        XCTAssertTrue(night.message.contains("display will sleep"))
+        XCTAssertTrue(night.message.contains("All connected displays will turn off now. Your Mac will lock."))
         XCTAssertEqual(night.confirmButtonTitle, "Start Night")
 
         let work = ModeSelectionConfirmation.replaceActiveSession(.work).presentation
@@ -207,8 +722,7 @@ final class ApplicationCoordinatorTests: XCTestCase {
         ).presentation
 
         XCTAssertEqual(confirmation.title, "Start Travel for 90 Minutes?")
-        XCTAssertTrue(confirmation.message.contains("Travel for 90 Minutes"))
-        XCTAssertTrue(confirmation.message.contains("display will sleep"))
+        XCTAssertTrue(confirmation.message.contains("All connected displays will turn off now. Your Mac will lock."))
         XCTAssertEqual(confirmation.confirmButtonTitle, "Start Travel for 90 Minutes")
     }
 
@@ -222,7 +736,7 @@ final class ApplicationCoordinatorTests: XCTestCase {
             "Replace the Current Session and Start Travel for 30 Minutes?"
         )
         XCTAssertTrue(confirmation.message.contains("Travel for 30 Minutes"))
-        XCTAssertTrue(confirmation.message.contains("display will sleep"))
+        XCTAssertTrue(confirmation.message.contains("All connected displays will turn off now. Your Mac will lock."))
         XCTAssertEqual(confirmation.confirmButtonTitle, "Start Travel for 30 Minutes")
     }
 

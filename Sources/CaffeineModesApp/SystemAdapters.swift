@@ -1,6 +1,7 @@
 import AppKit
 import CaffeineModesAppSupport
 import CaffeineModesCore
+import CoreGraphics
 import Darwin
 import Foundation
 import IOKit.pwr_mgt
@@ -169,6 +170,78 @@ final class SystemScreenLockPolicyChecker: ScreenLockPolicyChecking {
             throw ModeControlError.backend("macOS returned an unknown screen-lock grace period.")
         }
         return number.intValue
+    }
+}
+
+final class CGSessionScreenLockStateInspector: ScreenLockStateInspecting {
+    func screenIsLocked() throws -> Bool {
+        guard let dictionary = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+            throw ModeControlError.screenLockStateUnavailable(
+                "macOS did not return the current lock state."
+            )
+        }
+        if let isLocked = SessionLockStateParser.isLocked(
+            from: dictionary["CGSSessionScreenIsLocked"]
+        ) {
+            return isLocked
+        }
+        throw ModeControlError.screenLockStateUnavailable(
+            "macOS returned an unknown lock state."
+        )
+    }
+}
+
+final class AmphetaminePowerProtectInspector: PowerProtectInspecting {
+    static let configurationPath = "/private/etc/sudoers.d/amphetamine_PowerProtect"
+
+    func inspect() -> PowerProtectStatus {
+        guard HostArchitecture.requiresPowerProtect(
+            arm64Capability: Self.runtimeArm64Capability()
+        ) else {
+            return PowerProtectStatus(isRequired: false, isInstalled: false)
+        }
+        let script = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Scripts/com.if.Amphetamine/powerProtect.scpt")
+        let configuration = URL(fileURLWithPath: Self.configurationPath)
+        return PowerProtectStatus(
+            isRequired: true,
+            isInstalled: FileManager.default.fileExists(atPath: script.path)
+                && FileManager.default.fileExists(atPath: configuration.path)
+        )
+    }
+
+    private static func runtimeArm64Capability() -> Int32? {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("hw.optional.arm64", &value, &size, nil, 0) == 0 else {
+            return nil
+        }
+        return value
+    }
+}
+
+final class IOKitLidStateInspector: LidStateInspecting {
+    func lidState() -> LidState {
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault,
+            IOServiceMatching("IOPMrootDomain")
+        )
+        guard service != IO_OBJECT_NULL else { return .unavailable }
+        defer { IOObjectRelease(service) }
+        guard let value = IORegistryEntryCreateCFProperty(
+            service,
+            "AppleClamshellState" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue()
+        else { return .unavailable }
+        if let boolean = value as? Bool {
+            return boolean ? .closed : .open
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue ? .closed : .open
+        }
+        return .unavailable
     }
 }
 

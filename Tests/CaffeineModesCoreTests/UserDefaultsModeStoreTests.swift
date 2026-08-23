@@ -45,6 +45,7 @@ final class UserDefaultsModeStoreTests: XCTestCase {
         store.ownedSessionSignature = marker
         store.closedDisplayReadinessPassed = true
         store.launchAtLoginPromptWasShown = true
+        store.postUnlockMode = .work
 
         let reloaded = UserDefaultsModeStore(defaults: defaults)
         XCTAssertEqual(reloaded.lastRequestedMode, mode)
@@ -53,9 +54,18 @@ final class UserDefaultsModeStoreTests: XCTestCase {
         XCTAssertFalse(reloaded.ownedSessionSignature?.usesLegacyProjectionFormat ?? true)
         XCTAssertTrue(reloaded.closedDisplayReadinessPassed)
         XCTAssertTrue(reloaded.launchAtLoginPromptWasShown)
+        XCTAssertEqual(reloaded.postUnlockMode, .work)
 
         reloaded.ownedSessionSignature = nil
         XCTAssertNil(store.ownedSessionSignature)
+    }
+
+    func testPostUnlockModeDefaultsToOff() {
+        let suiteName = "UserDefaultsModeStoreTests-defaults-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(UserDefaultsModeStore(defaults: defaults).postUnlockMode, .off)
     }
 }
 

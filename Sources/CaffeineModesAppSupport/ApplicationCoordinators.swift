@@ -1,4 +1,5 @@
 import CaffeineModesCore
+import Foundation
 
 public enum ActiveSessionQuitChoice: Equatable, Sendable {
     case endAndQuit
@@ -107,7 +108,7 @@ public enum ModeSelectionConfirmation: Equatable, Sendable {
             let effect: String
             switch mode {
             case .night, .travel:
-                effect = " After Amphetamine confirms \(targetName), the display will sleep and your Mac will lock."
+                effect = " All connected displays will turn off now. Your Mac will lock."
             default:
                 effect = ""
             }
@@ -127,7 +128,7 @@ public enum ModeSelectionConfirmation: Equatable, Sendable {
             let effect: String
             switch mode {
             case .night, .travel:
-                effect = " After Amphetamine confirms \(targetName), the display will sleep and your Mac will lock."
+                effect = " All connected displays will turn off now. Your Mac will lock."
             default:
                 effect = ""
             }
@@ -291,6 +292,253 @@ public struct MenuActivityPolicy: Equatable, Sendable {
     }
 }
 
+public enum ScreenLifecycleFollowUp: Equatable, Sendable {
+    case none
+    case checkUnlockNow
+    case retryUnlockAfterDelay
+    case retryResleepAfterDelay
+    case resleepNow
+}
+
+public enum LifecycleObservationPolicy {
+    public static func accepts(_ snapshot: ModeSnapshot) -> Bool {
+        snapshot.health == .ready || snapshot.observedState != nil
+    }
+}
+
+public struct ScreenLifecycleActivity: Equatable, Sendable {
+    public private(set) var isBusy = false
+    private var unlockCheckIsPending = false
+    private var resleepIsPending = false
+    private var unlockRetryCount = 0
+    private var resleepRetryCount = 0
+    private let maximumUnlockRetries: Int
+    private let maximumResleepRetries: Int
+
+    public init(
+        maximumUnlockRetries: Int = 2,
+        maximumResleepRetries: Int = 1
+    ) {
+        self.maximumUnlockRetries = maximumUnlockRetries
+        self.maximumResleepRetries = maximumResleepRetries
+    }
+
+    public mutating func begin() -> Bool {
+        guard !isBusy else { return false }
+        isBusy = true
+        return true
+    }
+
+    public mutating func requestUnlockCheck() -> Bool {
+        guard begin() else {
+            unlockCheckIsPending = true
+            return false
+        }
+        return true
+    }
+
+    public mutating func requestResleep() -> Bool {
+        guard begin() else {
+            resleepIsPending = true
+            return false
+        }
+        return true
+    }
+
+    public mutating func beginDisplayVisibilityEvent() {
+        unlockRetryCount = 0
+        resleepRetryCount = 0
+    }
+
+    public mutating func beginUnlockEvent() {
+        unlockRetryCount = 0
+    }
+
+    public mutating func verifiedUnlockObserved() {
+        resetPendingWork()
+    }
+
+    public mutating func finishUnlockCheck(
+        succeeded: Bool,
+        awayModeIsActive: Bool
+    ) -> ScreenLifecycleFollowUp {
+        isBusy = false
+        guard awayModeIsActive else {
+            resetPendingWork()
+            return .none
+        }
+        if resleepIsPending {
+            resleepIsPending = false
+            return .resleepNow
+        }
+        if unlockCheckIsPending {
+            unlockCheckIsPending = false
+            return .checkUnlockNow
+        }
+        if succeeded {
+            unlockRetryCount = 0
+            return .none
+        }
+        guard unlockRetryCount < maximumUnlockRetries else { return .none }
+        unlockRetryCount += 1
+        return .retryUnlockAfterDelay
+    }
+
+    public mutating func finishOtherWork(
+        awayModeIsActive: Bool
+    ) -> ScreenLifecycleFollowUp {
+        isBusy = false
+        guard awayModeIsActive else {
+            resetPendingWork()
+            return .none
+        }
+        if resleepIsPending {
+            resleepIsPending = false
+            return .resleepNow
+        }
+        if unlockCheckIsPending {
+            unlockCheckIsPending = false
+            return .checkUnlockNow
+        }
+        return .none
+    }
+
+    public mutating func finishResleep(
+        succeeded: Bool,
+        awayModeIsActive: Bool
+    ) -> ScreenLifecycleFollowUp {
+        isBusy = false
+        guard awayModeIsActive else {
+            resetPendingWork()
+            return .none
+        }
+        if unlockCheckIsPending {
+            unlockCheckIsPending = false
+            return .checkUnlockNow
+        }
+        if resleepIsPending {
+            resleepIsPending = false
+            return .resleepNow
+        }
+        if succeeded {
+            resleepRetryCount = 0
+            return .none
+        }
+        guard resleepRetryCount < maximumResleepRetries else { return .none }
+        resleepRetryCount += 1
+        return .retryResleepAfterDelay
+    }
+
+    public mutating func modeDidChange(
+        awayModeIsActive: Bool,
+        identityChanged: Bool = false
+    ) {
+        if identityChanged || !awayModeIsActive {
+            resetPendingWork()
+        }
+    }
+
+    private mutating func resetPendingWork() {
+        unlockCheckIsPending = false
+        resleepIsPending = false
+        unlockRetryCount = 0
+        resleepRetryCount = 0
+    }
+}
+
+public struct LifecycleErrorState: Equatable, Sendable {
+    public private(set) var message: String?
+    private var recordedAt: Date?
+    private var wasPresented = false
+    private var requiresSuccessfulLifecycleCheck = false
+    private var successfulLifecycleCheckWasObserved = false
+    private var requiresSuccessfulResleep = false
+    private var successfulResleepWasObserved = false
+
+    public init() {}
+
+    public mutating func record(
+        _ message: String,
+        at date: Date,
+        requiresSuccessfulLifecycleCheck: Bool = false,
+        requiresSuccessfulResleep: Bool = false
+    ) {
+        self.message = message
+        recordedAt = date
+        wasPresented = false
+        self.requiresSuccessfulLifecycleCheck = requiresSuccessfulLifecycleCheck
+        successfulLifecycleCheckWasObserved = false
+        self.requiresSuccessfulResleep = requiresSuccessfulResleep
+        successfulResleepWasObserved = false
+    }
+
+    public mutating func recordFailure(
+        _ message: String?,
+        at date: Date,
+        requiresSuccessfulLifecycleCheck: Bool = false,
+        requiresSuccessfulResleep: Bool = false
+    ) {
+        guard let message else { return }
+        record(
+            message,
+            at: date,
+            requiresSuccessfulLifecycleCheck: requiresSuccessfulLifecycleCheck,
+            requiresSuccessfulResleep: requiresSuccessfulResleep
+        )
+    }
+
+    public mutating func noteSuccessfulLifecycleCheck() {
+        successfulLifecycleCheckWasObserved = true
+    }
+
+    public mutating func noteSuccessfulResleep() {
+        successfulLifecycleCheckWasObserved = true
+        successfulResleepWasObserved = true
+    }
+
+    public mutating func markPresented() {
+        if message != nil {
+            wasPresented = true
+        }
+    }
+
+    public mutating func clear() {
+        message = nil
+        recordedAt = nil
+        wasPresented = false
+        requiresSuccessfulLifecycleCheck = false
+        successfulLifecycleCheckWasObserved = false
+        requiresSuccessfulResleep = false
+        successfulResleepWasObserved = false
+    }
+
+    public mutating func refresh(
+        snapshot: ModeSnapshot,
+        report: PowerAssertionReport?,
+        now: Date,
+        minimumVisibility: TimeInterval = 5
+    ) {
+        guard message != nil,
+              wasPresented,
+              let recordedAt,
+              now.timeIntervalSince(recordedAt) >= minimumVisibility,
+              snapshot.health == .ready
+                || (!snapshot.requestedMode.isAwayMode && snapshot.observedState != nil),
+              !requiresSuccessfulLifecycleCheck
+                || successfulLifecycleCheckWasObserved
+                || !snapshot.requestedMode.isAwayMode,
+              !requiresSuccessfulResleep
+                || successfulResleepWasObserved
+                || !snapshot.requestedMode.isAwayMode
+        else { return }
+
+        if snapshot.requestedMode.isAwayMode {
+            guard let report, report.displaySleepBlockingProcesses.isEmpty else { return }
+        }
+        clear()
+    }
+}
+
 public struct RefreshRequestCoordinator: Sendable {
     public private(set) var isInProgress = false
     private var retryIsPending = false
@@ -312,6 +560,66 @@ public struct RefreshRequestCoordinator: Sendable {
         let shouldRetry = retryIsPending
         retryIsPending = false
         return shouldRetry
+    }
+}
+
+public struct PostUnlockChoiceState: Equatable, Sendable {
+    private var pendingOwnershipID: UUID?
+    private var presentedOwnershipID: UUID?
+    private var failedOwnershipID: UUID?
+
+    public init() {}
+
+    public var activeOwnershipID: UUID? {
+        pendingOwnershipID ?? presentedOwnershipID ?? failedOwnershipID
+    }
+
+    public mutating func request(for ownershipID: UUID) {
+        guard presentedOwnershipID != ownershipID else { return }
+        pendingOwnershipID = ownershipID
+        failedOwnershipID = nil
+    }
+
+    public mutating func presentationIfReady(
+        isBusy: Bool,
+        prepareForPresentation: () -> Void = {}
+    ) -> UUID? {
+        guard !isBusy, let pendingOwnershipID else { return nil }
+        prepareForPresentation()
+        self.pendingOwnershipID = nil
+        presentedOwnershipID = pendingOwnershipID
+        return pendingOwnershipID
+    }
+
+    public mutating func cancelPresentation(for ownershipID: UUID) {
+        if presentedOwnershipID == ownershipID {
+            presentedOwnershipID = nil
+        }
+    }
+
+    public mutating func transitionFailed(for ownershipID: UUID) {
+        guard presentedOwnershipID == ownershipID else { return }
+        presentedOwnershipID = nil
+        failedOwnershipID = ownershipID
+    }
+
+    public mutating func modeDidChange(awayOwnershipID: UUID?) {
+        guard awayOwnershipID == activeOwnershipID else {
+            pendingOwnershipID = nil
+            presentedOwnershipID = nil
+            failedOwnershipID = nil
+            return
+        }
+    }
+}
+
+public enum PostUnlockPresentationPolicy {
+    public static func isBusy(
+        setupIsBusy: Bool,
+        transitionIsInProgress: Bool,
+        modalWindowIsOpen: Bool
+    ) -> Bool {
+        setupIsBusy || transitionIsInProgress || modalWindowIsOpen
     }
 }
 

@@ -79,12 +79,27 @@ final class SetupAndVersionTests: XCTestCase {
 
     func testSetupReportIsReadyWhenEveryCheckPasses() {
         let fixture = Fixture()
+        fixture.store.closedDisplayReadinessPassed = false
 
         let report = fixture.controller.setupReport()
 
         XCTAssertTrue(report.isReady)
         XCTAssertEqual(report.detectedVersion, "5.3.2")
         XCTAssertEqual(report.amphetamineSessionIsActive, false)
+        XCTAssertFalse(report.developerDiagnosticPassed)
+        XCTAssertFalse(report.developerDiagnosticIsActive)
+    }
+
+    func testSetupRequiresPowerProtectOnlyWhenTheMacNeedsIt() {
+        let fixture = Fixture()
+        fixture.powerProtect.status = PowerProtectStatus(isRequired: true, isInstalled: false)
+
+        let missing = fixture.controller.setupReport()
+        XCTAssertFalse(missing.isReady)
+        XCTAssertEqual(missing.powerProtect, fixture.powerProtect.status)
+
+        fixture.powerProtect.status = PowerProtectStatus(isRequired: false, isInstalled: false)
+        XCTAssertTrue(fixture.controller.setupReport().isReady)
     }
 
     func testEnabledTriggersBlockWork() {
@@ -209,10 +224,26 @@ final class SetupAndVersionTests: XCTestCase {
         XCTAssertFalse(fixture.amphetamine.commands.contains("end"))
         XCTAssertEqual(fixture.store.ownedSessionSignature?.purpose, .readinessTest)
 
+        let report = fixture.controller.setupReport()
+        XCTAssertTrue(report.developerDiagnosticPassed)
+        XCTAssertTrue(report.developerDiagnosticIsActive)
+
         let snapshot = fixture.controller.reconcile()
         XCTAssertEqual(snapshot.requestedMode, .custom)
         XCTAssertEqual(snapshot.health, .ready)
-        XCTAssertTrue(snapshot.detail?.contains("end automatically") == true)
+        XCTAssertTrue(snapshot.detail?.contains("ends automatically") == true)
+    }
+
+    func testPassedDiagnosticDoesNotLabelAnotherActiveSessionAsDiagnostic() throws {
+        let fixture = Fixture()
+        fixture.store.closedDisplayReadinessPassed = true
+        _ = try fixture.controller.transition(to: .work, replacingActiveSession: true)
+
+        let report = fixture.controller.setupReport()
+
+        XCTAssertTrue(report.developerDiagnosticPassed)
+        XCTAssertEqual(report.amphetamineSessionIsActive, true)
+        XCTAssertFalse(report.developerDiagnosticIsActive)
     }
 
     func testClosedDisplayReadinessAllowsTimeForInteractiveAmphetaminePrompt() throws {
@@ -325,7 +356,7 @@ final class SetupAndVersionTests: XCTestCase {
         XCTAssertEqual(snapshot.health, .backendMismatch)
         XCTAssertEqual(
             snapshot.detail,
-            "The readiness-test session is active after its expected expiry."
+            "The closed-lid diagnostic is still active after its timer ended."
         )
         XCTAssertNil(fixture.store.ownedSessionSignature)
     }

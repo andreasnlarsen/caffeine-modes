@@ -6,7 +6,7 @@ requirement="${1:-}"
 
 run_tests() {
     local filter="$1"
-    swift test --package-path "$project_root" --filter "$filter" >/dev/null 2>&1
+    swift test --disable-sandbox --package-path "$project_root" --filter "$filter" >/dev/null 2>&1
 }
 
 case "$requirement" in
@@ -29,7 +29,10 @@ case "$requirement" in
         "$project_root/Scripts/verify-spec.sh" >/dev/null 2>&1
         ;;
     REQ-002)
-        rg -q 'final class SetupWindowController' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
+        rg -q 'final class SettingsWindowController' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
+        rg -q 'testEverySetupProblemKeepsItsActionOnTheSameRow' "$project_root/Tests/CaffeineModesCoreTests/SetupStatusPresentationTests.swift"
+        rg -q 'testDeveloperDiagnosticNeverBlocksSetup' "$project_root/Tests/CaffeineModesCoreTests/SetupStatusPresentationTests.swift"
+        rg -q 'testSetupRequiresPowerProtectOnlyWhenTheMacNeedsIt' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testMissingAmphetamineIsDeterministic' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testAutomationDenialIsReported' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testCompletedSetupCloseDeliversOnboardingOnce' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
@@ -42,7 +45,7 @@ case "$requirement" in
         rg -q 'testQuitEndRejectsUnsupportedAmphetamineBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testReadinessClosedDisplayPostMutationErrorRetainsObservedCleanupProjection' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testDisableTriggersRecoversPostMutationTimeoutWithinOriginalDeadline' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
-        run_tests 'SetupAndVersionTests|ScreenLockStatusParserTests|ApplicationCoordinatorTests/test.*SetupClose'
+        run_tests 'SetupAndVersionTests|SetupStatusPresentationTests|ScreenLockStatusParserTests|ApplicationCoordinatorTests/test.*SetupClose'
         run_tests 'ModeControllerTests/testQuit.*UnsupportedAmphetamine'
         ;;
     REQ-003)
@@ -59,11 +62,19 @@ case "$requirement" in
         rg -q 'testClassifierSeparatesDisplaySystemAndDiskAssertions' "$project_root/Tests/CaffeineModesCoreTests/PowerStatusPresentationTests.swift"
         rg -q 'testNightSleepsDisplayOnlyAfterAmphetamineVerification' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testJoinedCallerUsesFreshResultWithinOriginalDeadline' "$project_root/Tests/CaffeineModesCoreTests/FreshSingleFlightTests.swift"
-        run_tests 'ModeControllerTests|FreshSingleFlightTests|PowerStatusPresentationTests'
+        rg -q 'testWakeInNightChecksLockAndArmsThirtySecondResleep' "$project_root/Tests/CaffeineModesCoreTests/AwayModeWakeStateMachineTests.swift"
+        rg -q 'testDisplayConfigurationChangeInNightChecksLockAndArmsResleep' "$project_root/Tests/CaffeineModesCoreTests/AwayModeWakeStateMachineTests.swift"
+        rg -q 'testLockStateErrorStaysVisibleUntilALifecycleCheckSucceeds' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
+        rg -q 'testResleepFailureStaysVisibleUntilResleepSucceeds' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
+        rg -q 'testLockedNightResleepsAfterFreshVerification' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testUnlockRequiresExplicitChoiceAndDoesNotMutateNight' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testUnlockNeverEndsAnIdenticalReplacementSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        run_tests 'ModeControllerTests|AwayModeWakeStateMachineTests|FreshSingleFlightTests|PowerStatusPresentationTests|ApplicationCoordinatorTests/test(LockStateErrorStaysVisibleUntilALifecycleCheckSucceeds|ResleepFailureStaysVisibleUntilResleepSucceeds)'
         ;;
     REQ-005)
         rg -q 'allowedTravelDurations = \[30, 60, 90, 120\]' "$project_root/Sources/CaffeineModesCore/Domain.swift"
         rg -q 'testTravelExpiryReconcilesToOffWhenAmphetamineExpires' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testPostUnlockWorkPreferenceStillRequiresExplicitChoice' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         run_tests 'ModeControllerTests|TravelCountdownFormatterTests'
         ;;
     REQ-006)
@@ -97,6 +108,9 @@ case "$requirement" in
         rg -q 'applicationShouldTerminate' "$project_root/Sources/CaffeineModesApp/main.swift"
         rg -q 'operationTimeout: TimeInterval = 2' "$project_root/Sources/CaffeineModesCore/ModeController.swift"
         rg -q 'mutationRecoveryReserve: TimeInterval = 0.5' "$project_root/Sources/CaffeineModesCore/ModeController.swift"
+        rg -q 'testWorkNeverChangesClosedDisplayModeAfterSessionStart' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testWorkBlocksUnsafeClosedLidNormalizationBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testUnlockNeverMutatesUnownedCustomSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -Fq 'with timeout of \(timeoutLiteral) seconds' "$project_root/Sources/CaffeineModesApp/AmphetamineClient.swift"
         run_tests 'ModeControllerTests|ApplicationCoordinatorTests|SetupAndVersionTests/testReadiness.*Mutation'
         ;;
@@ -104,6 +118,10 @@ case "$requirement" in
         rg -q 'NSStatusBar.system.statusItem' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
         rg -q 'SMAppService.mainApp' "$project_root/Sources/CaffeineModesApp/SystemAdapters.swift"
         rg -q 'testOffDistinguishesDisplayAndAutomaticSleepBlockers' "$project_root/Tests/CaffeineModesCoreTests/PowerStatusPresentationTests.swift"
+        rg -q 'Settings…' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
+        rg -q 'How Modes Work…' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
+        rg -q 'case developer' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
+        rg -Fq 'Open + external' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
         run_tests 'PowerStatusPresentationTests|SetupStatusPresentationTests'
         "$project_root/Scripts/verify-app.sh" >/dev/null 2>&1
         ;;

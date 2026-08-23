@@ -6,8 +6,8 @@ app_name="Caffeine Modes"
 bundle="$project_root/build/$app_name.app"
 contents="$bundle/Contents"
 identity="${CODE_SIGN_IDENTITY:--}"
-app_version="${APP_VERSION:-1.0.2}"
-build_number="${BUILD_NUMBER:-3}"
+app_version="${APP_VERSION:-1.1.0}"
+build_number="${BUILD_NUMBER:-4}"
 
 mkdir -p "$project_root/build" "$project_root/dist"
 if [[ -e "$bundle" ]]; then
@@ -16,6 +16,7 @@ fi
 
 for architecture in arm64 x86_64; do
     swift build \
+        --disable-sandbox \
         --package-path "$project_root" \
         --configuration release \
         --product CaffeineModes \

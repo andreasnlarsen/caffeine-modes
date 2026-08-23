@@ -4,6 +4,9 @@ public final class ModeController: ModeControlling {
     private let amphetamine: AmphetamineControlling
     private let assertions: PowerAssertionInspecting
     private let screenLock: ScreenLockPolicyChecking
+    private let screenLockState: ScreenLockStateInspecting
+    private let powerProtect: PowerProtectInspecting
+    private let lidState: LidStateInspecting
     private let display: DisplaySleeping
     private let store: ModeStateStoring
     private let clock: TimeProviding
@@ -21,6 +24,9 @@ public final class ModeController: ModeControlling {
         amphetamine: AmphetamineControlling,
         assertions: PowerAssertionInspecting,
         screenLock: ScreenLockPolicyChecking,
+        screenLockState: ScreenLockStateInspecting,
+        powerProtect: PowerProtectInspecting,
+        lidState: LidStateInspecting,
         display: DisplaySleeping,
         store: ModeStateStoring,
         clock: TimeProviding = SystemTimeProvider(),
@@ -31,6 +37,9 @@ public final class ModeController: ModeControlling {
         self.amphetamine = amphetamine
         self.assertions = assertions
         self.screenLock = screenLock
+        self.screenLockState = screenLockState
+        self.powerProtect = powerProtect
+        self.lidState = lidState
         self.display = display
         self.store = store
         self.clock = clock
@@ -103,19 +112,19 @@ public final class ModeController: ModeControlling {
                    expiresAt.addingTimeInterval(5) < clock.now {
                     store.ownedSessionSignature = nil
                     store.lastRequestedMode = .custom
-                    return snapshot(.custom, state, .backendMismatch, detail: "The readiness-test session is active after its expected expiry.")
+                    return snapshot(.custom, state, .backendMismatch, detail: "The closed-lid diagnostic is still active after its timer ended.")
                 }
                 guard stateMatchesOwnedSignature(state, signature: signature) else {
                     store.ownedSessionSignature = nil
                     store.lastRequestedMode = .custom
-                    return snapshot(.custom, state, .conflicted, detail: "The Amphetamine readiness-test session changed outside Caffeine Modes.")
+                    return snapshot(.custom, state, .conflicted, detail: "The Amphetamine diagnostic session changed outside Caffeine Modes.")
                 }
                 store.lastRequestedMode = .custom
                 return snapshot(
                     .custom,
                     state,
                     .ready,
-                    detail: "Closed-display readiness test is active and will end automatically.",
+                    detail: "Closed-lid diagnostic passed. The temporary session ends automatically.",
                     marker: signature
                 )
             }
@@ -160,13 +169,37 @@ public final class ModeController: ModeControlling {
             throw ModeControlError.sessionStartRequiresConfirmation
         }
         let targetMode = mode
-        let signatureBeforeMutation = preflightMatchesStoredSignature ? before.ownershipMarker : nil
+        var signatureBeforeMutation = preflightMatchesStoredSignature ? before.ownershipMarker : nil
+        var preStartMutationWasAttempted = false
         var sessionStartWasAttempted = false
         var sessionStartCompleted = false
         var fallbackCleanupSignature: OwnedSessionSignature?
         var pendingCleanupWasPersisted = false
 
         do {
+            var startState = preflightState
+            if targetMode != .off, startState.sessionIsActive {
+                preStartMutationWasAttempted = true
+                try endAmphetamineSession(deadline: deadline)
+                startState = try readAmphetamineState(deadline: deadline)
+                guard !startState.sessionIsActive else {
+                    throw ModeControlError.verificationFailed(
+                        "Amphetamine did not end the previous session before \(targetMode.displayName) started."
+                    )
+                }
+                signatureBeforeMutation = nil
+                store.ownedSessionSignature = nil
+                store.lastRequestedMode = .custom
+            }
+            if targetMode == .work {
+                preStartMutationWasAttempted = preStartMutationWasAttempted
+                    || startState.closedDisplayModeEnabled
+                startState = try prepareInactiveClosedDisplayDefault(
+                    startState,
+                    deadline: deadline
+                )
+            }
+
             switch targetMode {
             case .off:
                 if preflightState.sessionIsActive {
@@ -182,17 +215,7 @@ public final class ModeController: ModeControlling {
                 let startedMode = modeAnchoredAfterConfirmedStart(targetMode)
                 fallbackCleanupSignature = persistProvisionalCleanupSignature(
                     for: startedMode,
-                    preflightState: preflightState
-                )
-                try checkDeadline(deadline)
-                try amphetamine.setClosedDisplayMode(
-                    enabled: false,
-                    timeout: try remainingMutationTime(deadline)
-                )
-                fallbackCleanupSignature = persistProvisionalCleanupSignature(
-                    for: startedMode,
-                    preflightState: preflightState,
-                    closedDisplayModeEnabled: false
+                    preflightState: startState
                 )
                 try checkDeadline(deadline)
             case .night:
@@ -205,7 +228,7 @@ public final class ModeController: ModeControlling {
                 let startedMode = modeAnchoredAfterConfirmedStart(targetMode)
                 fallbackCleanupSignature = persistProvisionalCleanupSignature(
                     for: startedMode,
-                    preflightState: preflightState
+                    preflightState: startState
                 )
                 try checkDeadline(deadline)
                 try amphetamine.setClosedDisplayMode(
@@ -229,7 +252,7 @@ public final class ModeController: ModeControlling {
                 let startedMode = modeAnchoredAfterConfirmedStart(targetMode)
                 fallbackCleanupSignature = persistProvisionalCleanupSignature(
                     for: startedMode,
-                    preflightState: preflightState
+                    preflightState: startState
                 )
                 try checkDeadline(deadline)
                 try amphetamine.setClosedDisplayMode(
@@ -282,7 +305,7 @@ public final class ModeController: ModeControlling {
         } catch {
             if !pendingCleanupWasPersisted {
                 if targetMode == .off {
-                    store.ownedSessionSignature = verifiedSignatureAfterFailedOff(
+                    store.ownedSessionSignature = verifiedPriorSignatureAfterFailedMutation(
                         signatureBeforeMutation,
                         deadline: deadline
                     )
@@ -292,6 +315,11 @@ public final class ModeController: ModeControlling {
                         priorSignature: signatureBeforeMutation,
                         startCompleted: sessionStartCompleted,
                         fallbackSignature: fallbackCleanupSignature,
+                        deadline: deadline
+                    )
+                } else if preStartMutationWasAttempted {
+                    store.ownedSessionSignature = verifiedPriorSignatureAfterFailedMutation(
+                        signatureBeforeMutation,
                         deadline: deadline
                     )
                 } else {
@@ -315,6 +343,7 @@ public final class ModeController: ModeControlling {
         var automation = SetupCheckState.unchecked(reason: nil)
         var triggers = SetupCheckState.unchecked(reason: nil)
         var sessionIsActive: Bool?
+        var developerDiagnosticIsActive = false
 
         if installed, supported {
             do {
@@ -322,6 +351,10 @@ public final class ModeController: ModeControlling {
                 automation = .passed
                 triggers = state.triggersEnabled ? .needsAction : .passed
                 sessionIsActive = state.sessionIsActive
+                developerDiagnosticIsActive = store.ownedSessionSignature.map {
+                    $0.purpose == .readinessTest
+                        && stateMatchesOwnedSignature(state, signature: $0)
+                } ?? false
             } catch ModeControlError.automationDenied {
                 automation = .needsAction
             } catch {
@@ -348,7 +381,9 @@ public final class ModeController: ModeControlling {
             automation: automation,
             triggers: triggers,
             screenLock: screenLockState,
-            closedDisplayReady: store.closedDisplayReadinessPassed,
+            powerProtect: powerProtect.inspect(),
+            developerDiagnosticPassed: store.closedDisplayReadinessPassed,
+            developerDiagnosticIsActive: developerDiagnosticIsActive,
             amphetamineSessionIsActive: sessionIsActive
         )
     }
@@ -378,14 +413,13 @@ public final class ModeController: ModeControlling {
         entryLock.lock()
         defer { entryLock.unlock() }
         let preflightDeadline = makeDeadline()
-        let preflightState = try preflight(
-            .work,
-            requireClosedDisplayReadiness: false,
-            deadline: preflightDeadline
-        )
+        let preflightState = try preflight(.work, deadline: preflightDeadline)
+        guard powerProtect.inspect().isReady else {
+            throw ModeControlError.powerProtectMissing
+        }
         let current = reconcile(deadline: preflightDeadline)
         guard current.requestedMode == .off else {
-            throw ModeControlError.verificationFailed("Turn the current session Off before the readiness test.")
+            throw ModeControlError.verificationFailed("Turn the current session Off before the diagnostic.")
         }
         guard authorizingSessionReplacement else {
             throw ModeControlError.sessionStartRequiresConfirmation
@@ -447,6 +481,75 @@ public final class ModeController: ModeControlling {
             lastMutationFailure = detail
             throw error
         }
+    }
+
+    public func handleScreenUnlocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        entryLock.lock()
+        defer { entryLock.unlock() }
+        let deadline = makeDeadline()
+        let current = reconcile(deadline: deadline)
+        guard current.health == .ready,
+              current.requestedMode.isAwayMode,
+              let marker = current.ownershipMarker,
+              marker.purpose == .activeMode,
+              marker.id == expectedOwnershipID,
+              let observed = current.observedState,
+              stateMatchesOwnedSignature(observed, signature: marker)
+        else { return current }
+        guard try !screenLockState.screenIsLocked() else { return current }
+        return postUnlockChoiceSnapshot(current)
+    }
+
+    public func resleepAwayModeIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        entryLock.lock()
+        defer { entryLock.unlock() }
+        let deadline = makeDeadline()
+        let current = reconcile(deadline: deadline)
+        guard current.health == .ready,
+              current.requestedMode.isAwayMode,
+              let marker = current.ownershipMarker,
+              marker.purpose == .activeMode,
+              marker.id == expectedOwnershipID,
+              let observed = current.observedState,
+              stateMatchesOwnedSignature(observed, signature: marker)
+        else { return current }
+
+        guard try screenLockState.screenIsLocked() else {
+            return postUnlockChoiceSnapshot(current)
+        }
+        let blockers = try assertions.inspect(timeout: try remainingTime(deadline))
+            .displaySleepBlockingProcesses
+        try checkDeadline(deadline)
+        guard blockers.isEmpty else {
+            throw ModeControlError.displaySleepBlocked(blockers)
+        }
+
+        let refreshed = reconcile(deadline: deadline)
+        guard refreshed.health == .ready,
+              refreshed.requestedMode.isAwayMode,
+              let refreshedMarker = refreshed.ownershipMarker,
+              refreshedMarker.id == marker.id,
+              refreshedMarker.purpose == .activeMode,
+              let refreshedState = refreshed.observedState,
+              stateMatchesOwnedSignature(refreshedState, signature: refreshedMarker)
+        else { return refreshed }
+        guard try screenLockState.screenIsLocked() else {
+            return postUnlockChoiceSnapshot(refreshed)
+        }
+        try display.sleepDisplay(timeout: try remainingTime(deadline))
+        try checkDeadline(deadline)
+        return refreshed
+    }
+
+    private func postUnlockChoiceSnapshot(_ current: ModeSnapshot) -> ModeSnapshot {
+        snapshot(
+            current.requestedMode,
+            current.observedState,
+            current.health,
+            detail: "You unlocked your Mac. Choose Off or Work.",
+            marker: current.ownershipMarker,
+            requiresPostUnlockChoice: true
+        )
     }
 
     public func hasActiveSessionForQuit() throws -> Bool {
@@ -543,7 +646,6 @@ public final class ModeController: ModeControlling {
 
     private func preflight(
         _ mode: OperatingMode,
-        requireClosedDisplayReadiness: Bool = true,
         deadline: OperationDeadline
     ) throws -> AmphetamineState {
         try requireAmphetamine()
@@ -560,14 +662,20 @@ public final class ModeController: ModeControlling {
             guard !state.triggersEnabled else { throw ModeControlError.triggersEnabled }
         }
 
+        if mode == .work,
+           state.closedDisplayModeEnabled,
+           lidState.lidState() != .open {
+            throw ModeControlError.openLidToStartWork
+        }
+
         if mode.requiresDisplaySleep {
+            guard powerProtect.inspect().isReady else {
+                throw ModeControlError.powerProtectMissing
+            }
             guard try screenLock.hasImmediateScreenLock(timeout: try remainingTime(deadline)) else {
                 throw ModeControlError.screenLockNotImmediate
             }
             try checkDeadline(deadline)
-            if requireClosedDisplayReadiness, !store.closedDisplayReadinessPassed {
-                throw ModeControlError.verificationFailed("Complete the closed-display readiness test first.")
-            }
             let blockers = try assertions.inspect(timeout: try remainingTime(deadline))
                 .displaySleepBlockingProcesses
             try checkDeadline(deadline)
@@ -576,6 +684,33 @@ public final class ModeController: ModeControlling {
             }
         }
         return state
+    }
+
+    private func prepareInactiveClosedDisplayDefault(
+        _ state: AmphetamineState,
+        deadline: OperationDeadline
+    ) throws -> AmphetamineState {
+        guard !state.sessionIsActive else {
+            throw ModeControlError.verificationFailed(
+                "Amphetamine must be Off before Caffeine Modes prepares a new session."
+            )
+        }
+        guard state.closedDisplayModeEnabled else { return state }
+        guard lidState.lidState() == .open else {
+            throw ModeControlError.openLidToStartWork
+        }
+        try amphetamine.setClosedDisplayMode(
+            enabled: false,
+            timeout: try remainingMutationTime(deadline)
+        )
+        try checkDeadline(deadline)
+        let observed = try readAmphetamineState(deadline: deadline)
+        guard !observed.sessionIsActive, !observed.closedDisplayModeEnabled else {
+            throw ModeControlError.verificationFailed(
+                "Amphetamine did not confirm its safe closed-display default."
+            )
+        }
+        return observed
     }
 
     private func makeDeadline(timeout: TimeInterval? = nil) -> OperationDeadline {
@@ -651,7 +786,7 @@ public final class ModeController: ModeControlling {
         }
     }
 
-    private func verifiedSignatureAfterFailedOff(
+    private func verifiedPriorSignatureAfterFailedMutation(
         _ priorSignature: OwnedSessionSignature?,
         deadline: OperationDeadline
     ) -> OwnedSessionSignature? {
@@ -798,6 +933,11 @@ public final class ModeController: ModeControlling {
     }
 
     private func validate(_ mode: OperatingMode) throws {
+        if mode == .custom {
+            throw ModeControlError.verificationFailed(
+                "Custom is an observed state and cannot be selected."
+            )
+        }
         if case let .travel(durationMinutes, _) = mode,
            !OperatingMode.allowedTravelDurations.contains(durationMinutes) {
             throw ModeControlError.invalidTravelDuration(durationMinutes)
@@ -922,14 +1062,16 @@ public final class ModeController: ModeControlling {
         _ state: AmphetamineState?,
         _ health: ControlHealth,
         detail: String? = nil,
-        marker: OwnedSessionSignature? = nil
+        marker: OwnedSessionSignature? = nil,
+        requiresPostUnlockChoice: Bool = false
     ) -> ModeSnapshot {
         ModeSnapshot(
             requestedMode: mode,
             observedState: state,
             ownershipMarker: marker ?? store.ownedSessionSignature,
             health: health,
-            detail: detail
+            detail: detail,
+            requiresPostUnlockChoice: requiresPostUnlockChoice
         )
     }
 

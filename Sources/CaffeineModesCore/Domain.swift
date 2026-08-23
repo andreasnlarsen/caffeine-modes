@@ -23,6 +23,24 @@ public enum OperatingMode: Equatable, Codable, Sendable {
     }
 
     public static let allowedTravelDurations = [30, 60, 90, 120]
+
+    public var isAwayMode: Bool {
+        switch self {
+        case .night, .travel: true
+        case .off, .work, .custom: false
+        }
+    }
+}
+
+public enum PostUnlockMode: String, Equatable, Codable, Sendable {
+    case off
+    case work
+}
+
+public enum LidState: Equatable, Sendable {
+    case open
+    case closed
+    case unavailable
 }
 
 public enum ControlHealth: String, Equatable, Codable, Sendable {
@@ -128,6 +146,7 @@ public struct ModeSnapshot: Equatable, Sendable {
     public var health: ControlHealth
     public var blockingProcesses: [String]
     public var detail: String?
+    public var requiresPostUnlockChoice: Bool
 
     public init(
         requestedMode: OperatingMode,
@@ -135,7 +154,8 @@ public struct ModeSnapshot: Equatable, Sendable {
         ownershipMarker: OwnedSessionSignature?,
         health: ControlHealth,
         blockingProcesses: [String] = [],
-        detail: String? = nil
+        detail: String? = nil,
+        requiresPostUnlockChoice: Bool = false
     ) {
         self.requestedMode = requestedMode
         self.observedState = observedState
@@ -143,6 +163,7 @@ public struct ModeSnapshot: Equatable, Sendable {
         self.health = health
         self.blockingProcesses = blockingProcesses
         self.detail = detail
+        self.requiresPostUnlockChoice = requiresPostUnlockChoice
     }
 }
 
@@ -192,6 +213,20 @@ public enum SetupCheckState: Equatable, Sendable {
     case unchecked(reason: String?)
 }
 
+public struct PowerProtectStatus: Equatable, Sendable {
+    public var isRequired: Bool
+    public var isInstalled: Bool
+
+    public init(isRequired: Bool, isInstalled: Bool) {
+        self.isRequired = isRequired
+        self.isInstalled = isInstalled
+    }
+
+    public var isReady: Bool {
+        !isRequired || isInstalled
+    }
+}
+
 public struct SetupReport: Equatable, Sendable {
     public var amphetamineInstalled: Bool
     public var supportedVersion: Bool
@@ -199,7 +234,9 @@ public struct SetupReport: Equatable, Sendable {
     public var automation: SetupCheckState
     public var triggers: SetupCheckState
     public var screenLock: SetupCheckState
-    public var closedDisplayReady: Bool
+    public var powerProtect: PowerProtectStatus
+    public var developerDiagnosticPassed: Bool
+    public var developerDiagnosticIsActive: Bool
     public var amphetamineSessionIsActive: Bool?
 
     public init(
@@ -209,7 +246,9 @@ public struct SetupReport: Equatable, Sendable {
         automation: SetupCheckState,
         triggers: SetupCheckState,
         screenLock: SetupCheckState,
-        closedDisplayReady: Bool,
+        powerProtect: PowerProtectStatus,
+        developerDiagnosticPassed: Bool,
+        developerDiagnosticIsActive: Bool = false,
         amphetamineSessionIsActive: Bool? = nil
     ) {
         self.amphetamineInstalled = amphetamineInstalled
@@ -218,7 +257,9 @@ public struct SetupReport: Equatable, Sendable {
         self.automation = automation
         self.triggers = triggers
         self.screenLock = screenLock
-        self.closedDisplayReady = closedDisplayReady
+        self.powerProtect = powerProtect
+        self.developerDiagnosticPassed = developerDiagnosticPassed
+        self.developerDiagnosticIsActive = developerDiagnosticIsActive
         self.amphetamineSessionIsActive = amphetamineSessionIsActive
     }
 
@@ -228,7 +269,7 @@ public struct SetupReport: Equatable, Sendable {
             && automation == .passed
             && triggers == .passed
             && screenLock == .passed
-            && closedDisplayReady
+            && powerProtect.isReady
     }
 }
 
@@ -238,6 +279,9 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
     case automationDenied
     case triggersEnabled
     case screenLockNotImmediate
+    case powerProtectMissing
+    case openLidToStartWork
+    case screenLockStateUnavailable(String)
     case displaySleepBlocked([String])
     case activeSessionRequiresConfirmation
     case sessionStartRequiresConfirmation
@@ -258,6 +302,12 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
             "Disable Amphetamine Triggers before Caffeine Modes takes control."
         case .screenLockNotImmediate:
             "Set Require password after screen saver begins or display is turned off to Immediately."
+        case .powerProtectMissing:
+            "Install Amphetamine Power Protect before you use Night or Travel."
+        case .openLidToStartWork:
+            "Open the Mac lid once, then start Work again."
+        case let .screenLockStateUnavailable(message):
+            message
         case let .displaySleepBlocked(processes):
             "Display sleep is blocked by: \(processes.joined(separator: ", "))."
         case .activeSessionRequiresConfirmation:

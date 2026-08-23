@@ -29,7 +29,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CaffeineModesCoreTests",
-            dependencies: ["CaffeineModesCore", "CaffeineModesAppSupport"],
+            dependencies: ["CaffeineModesCore", "CaffeineModesAppSupport", "CaffeineModesApp"],
             path: "Tests/CaffeineModesCoreTests"
         )
     ]

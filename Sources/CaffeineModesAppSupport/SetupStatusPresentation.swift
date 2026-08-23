@@ -12,16 +12,16 @@ public enum SetupRowAction: Equatable, Sendable {
     case openAutomationSettings
     case disableTriggers
     case openLockScreenSettings
-    case runClosedLidCheck
+    case getPowerProtect
 
     public var title: String {
         switch self {
         case .getAmphetamine: "Get Amphetamine"
         case .updateAmphetamine: "Update Amphetamine"
-        case .openAutomationSettings: "Open Automation Settings"
-        case .disableTriggers: "Disable Triggers"
-        case .openLockScreenSettings: "Open Lock Screen Settings"
-        case .runClosedLidCheck: "Run Check"
+        case .openAutomationSettings: "Open Settings"
+        case .disableTriggers: "Turn Off Triggers"
+        case .openLockScreenSettings: "Open Settings"
+        case .getPowerProtect: "Get Power Protect"
         }
     }
 }
@@ -35,21 +35,65 @@ public struct SetupRowPresentation: Equatable, Sendable {
     public let actionIsEnabled: Bool
 }
 
+public struct DeveloperDiagnosticAvailability: Equatable, Sendable {
+    public let isEnabled: Bool
+    public let blockedStatus: String?
+
+    public init(isEnabled: Bool, blockedStatus: String?) {
+        self.isEnabled = isEnabled
+        self.blockedStatus = blockedStatus
+    }
+
+    public static func make(report: SetupReport?) -> DeveloperDiagnosticAvailability {
+        guard let report else {
+            return DeveloperDiagnosticAvailability(
+                isEnabled: false,
+                blockedStatus: "Check Amphetamine first"
+            )
+        }
+        if report.developerDiagnosticIsActive {
+            return DeveloperDiagnosticAvailability(isEnabled: false, blockedStatus: nil)
+        }
+        guard report.amphetamineInstalled,
+              report.supportedVersion,
+              report.automation == .passed,
+              report.triggers == .passed,
+              !report.powerProtect.isRequired || report.powerProtect.isInstalled
+        else {
+            return DeveloperDiagnosticAvailability(
+                isEnabled: false,
+                blockedStatus: "Complete Setup first"
+            )
+        }
+        switch report.amphetamineSessionIsActive {
+        case false:
+            return DeveloperDiagnosticAvailability(isEnabled: true, blockedStatus: nil)
+        case true:
+            return DeveloperDiagnosticAvailability(isEnabled: false, blockedStatus: "Turn Off first")
+        case nil:
+            return DeveloperDiagnosticAvailability(
+                isEnabled: false,
+                blockedStatus: "Check Amphetamine first"
+            )
+        }
+    }
+}
+
 public struct SetupStatusPresentation: Equatable, Sendable {
-    public static let intro = "Work needs Amphetamine, Automation access, and Triggers turned off. Night and Travel also need immediate screen locking and the closed-lid setup check. Caffeine Modes never asks for Accessibility access."
-    public static let coreGroupTitle = "Needed for Work, Night, and Travel"
-    public static let displaySleepGroupTitle = "Needed for Night and Travel"
+    public static let intro = "Complete each item once. Caffeine Modes does not need Accessibility access."
+    public static let coreGroupTitle = "For all modes"
+    public static let displaySleepGroupTitle = "For Night and Travel"
 
     public let amphetamine: SetupRowPresentation
     public let automation: SetupRowPresentation
     public let triggers: SetupRowPresentation
     public let screenLock: SetupRowPresentation
-    public let closedLid: SetupRowPresentation
+    public let powerProtect: SetupRowPresentation
     public let summary: String
     public let isComplete: Bool
 
     public var rows: [SetupRowPresentation] {
-        [amphetamine, automation, triggers, screenLock, closedLid]
+        [amphetamine, automation, triggers, screenLock, powerProtect]
     }
 
     public static let checking = SetupStatusPresentation(
@@ -57,35 +101,30 @@ public struct SetupStatusPresentation: Equatable, Sendable {
         automation: row(title: RowTitle.automation, indicator: .notChecked, detail: checkingDetail),
         triggers: row(title: RowTitle.triggers, indicator: .notChecked, detail: checkingDetail),
         screenLock: row(title: RowTitle.screenLock, indicator: .notChecked, detail: checkingDetail),
-        closedLid: row(title: RowTitle.closedLid, indicator: .notChecked, detail: checkingDetail),
+        powerProtect: row(title: RowTitle.powerProtect, indicator: .notChecked, detail: checkingDetail),
         summary: "Checking…",
         isComplete: false
     )
 
     public static func make(
         report: SetupReport,
-        triggersActionFailure: String? = nil,
-        closedLidActionFailure: String? = nil
+        triggersActionFailure: String? = nil
     ) -> SetupStatusPresentation {
         let rows = [
             amphetamineRow(report: report),
             automationRow(report: report),
             triggersRow(report: report, actionFailure: triggersActionFailure),
             screenLockRow(report: report),
-            closedLidRow(report: report, actionFailure: closedLidActionFailure)
+            powerProtectRow(report: report)
         ]
-        let completeCount = rows.filter { $0.indicator == .complete }.count
-        let isComplete = report.isReady
         return SetupStatusPresentation(
             amphetamine: rows[0],
             automation: rows[1],
             triggers: rows[2],
             screenLock: rows[3],
-            closedLid: rows[4],
-            summary: isComplete
-                ? "Setup complete. Work, Night, and Travel are ready."
-                : "\(completeCount) of \(rows.count) checks complete.",
-            isComplete: isComplete
+            powerProtect: rows[4],
+            summary: report.isReady ? "Ready" : "Setup needs attention",
+            isComplete: report.isReady
         )
     }
 
@@ -93,8 +132,8 @@ public struct SetupStatusPresentation: Equatable, Sendable {
         static let amphetamine = "Amphetamine 5.3.2 or later"
         static let automation = "Automation access"
         static let triggers = "Amphetamine Triggers off"
-        static let screenLock = "Immediate screen locking"
-        static let closedLid = "Closed-lid setup check"
+        static let screenLock = "Lock immediately"
+        static let powerProtect = "Amphetamine Power Protect"
     }
 
     private static let checkingDetail = "Checking…"
@@ -104,24 +143,22 @@ public struct SetupStatusPresentation: Equatable, Sendable {
             return row(
                 title: RowTitle.amphetamine,
                 indicator: .needsAction,
-                detail: "Amphetamine is not installed. Caffeine Modes controls sleep through Amphetamine.",
+                detail: "Install Amphetamine to use Caffeine Modes.",
                 action: .getAmphetamine
             )
         }
         guard report.supportedVersion else {
-            let installed = report.detectedVersion.map { "Version \($0) is installed" }
-                ?? "The installed version could not be read"
             return row(
                 title: RowTitle.amphetamine,
                 indicator: .needsAction,
-                detail: "\(installed), and Caffeine Modes needs 5.3.2 or later.",
+                detail: "Version \(report.detectedVersion ?? "unknown") is installed. Update to 5.3.2 or later.",
                 action: .updateAmphetamine
             )
         }
         return row(
             title: RowTitle.amphetamine,
             indicator: .complete,
-            detail: report.detectedVersion.map { "Version \($0) is installed." } ?? "Installed."
+            detail: "Version \(report.detectedVersion ?? "5.3.2 or later") is installed."
         )
     }
 
@@ -131,21 +168,20 @@ public struct SetupStatusPresentation: Equatable, Sendable {
             row(
                 title: RowTitle.automation,
                 indicator: .complete,
-                detail: "macOS lets Caffeine Modes control Amphetamine."
+                detail: "Caffeine Modes can control Amphetamine."
             )
         case .needsAction:
             row(
                 title: RowTitle.automation,
                 indicator: .needsAction,
-                detail: "macOS is blocking Caffeine Modes from controlling Amphetamine. Allow Caffeine Modes in Automation settings.",
+                detail: "Allow Caffeine Modes to control Amphetamine.",
                 action: .openAutomationSettings
             )
         case let .unchecked(reason):
             row(
                 title: RowTitle.automation,
                 indicator: .notChecked,
-                detail: reason.map { "\($0) Use Check Again to retry." }
-                    ?? "Checked once the Amphetamine check passes."
+                detail: reason ?? "Check Amphetamine first."
             )
         }
     }
@@ -154,37 +190,36 @@ public struct SetupStatusPresentation: Equatable, Sendable {
         report: SetupReport,
         actionFailure: String?
     ) -> SetupRowPresentation {
-        switch report.triggers {
-        case .passed:
-            row(
-                title: RowTitle.triggers,
-                indicator: .complete,
-                detail: "Amphetamine will not start sessions on its own."
-            )
-        case .needsAction:
-            row(
+        if let actionFailure {
+            return row(
                 title: RowTitle.triggers,
                 indicator: .needsAction,
-                detail: actionFailure
-                    ?? "Triggers let Amphetamine start sessions on its own, which can conflict with the mode you pick here. Caffeine Modes needs to be the only session owner.",
-                action: .disableTriggers
+                detail: actionFailure,
+                action: .disableTriggers,
+                actionIsEnabled: report.automation == .passed
             )
-        case .unchecked:
-            if let actionFailure {
-                row(
-                    title: RowTitle.triggers,
-                    indicator: .needsAction,
-                    detail: actionFailure,
-                    action: .disableTriggers,
-                    actionIsEnabled: report.automation == .passed
-                )
-            } else {
-                row(
-                    title: RowTitle.triggers,
-                    indicator: .notChecked,
-                    detail: "Checked once Automation access works."
-                )
-            }
+        }
+        switch report.triggers {
+        case .passed:
+            return row(
+                title: RowTitle.triggers,
+                indicator: .complete,
+                detail: "Triggers are off."
+            )
+        case .needsAction:
+            return row(
+                title: RowTitle.triggers,
+                indicator: .needsAction,
+                detail: "Turn off Triggers to prevent mode conflicts.",
+                action: .disableTriggers,
+                actionIsEnabled: report.automation == .passed
+            )
+        case let .unchecked(reason):
+            return row(
+                title: RowTitle.triggers,
+                indicator: .notChecked,
+                detail: reason ?? "Check Automation access first."
+            )
         }
     }
 
@@ -194,82 +229,44 @@ public struct SetupStatusPresentation: Equatable, Sendable {
             return row(
                 title: RowTitle.screenLock,
                 indicator: .complete,
-                detail: "Your Mac locks as soon as the display turns off."
+                detail: "Your Mac locks when displays turn off."
             )
         case .needsAction:
             return row(
                 title: RowTitle.screenLock,
                 indicator: .needsAction,
-                detail: "Your Mac waits before it requires a password. Set “Require password after screen saver begins or display is turned off” to Immediately.",
+                detail: "Set Require password to Immediately.",
                 action: .openLockScreenSettings
             )
         case let .unchecked(reason):
-            let detail: String
-            if let reason {
-                detail = "\(reason) Night and Travel stay blocked until macOS reports an immediate lock. Use Check Again to retry."
-            } else {
-                detail = "The screen-lock policy has not been checked yet."
-            }
-            return row(title: RowTitle.screenLock, indicator: .notChecked, detail: detail)
+            return row(
+                title: RowTitle.screenLock,
+                indicator: .notChecked,
+                detail: reason ?? "The lock setting was not checked."
+            )
         }
     }
 
-    private static func closedLidRow(
-        report: SetupReport,
-        actionFailure: String?
-    ) -> SetupRowPresentation {
-        guard !report.closedDisplayReady else {
+    private static func powerProtectRow(report: SetupReport) -> SetupRowPresentation {
+        if !report.powerProtect.isRequired {
             return row(
-                title: RowTitle.closedLid,
+                title: RowTitle.powerProtect,
                 indicator: .complete,
-                detail: "Amphetamine confirmed closed-display mode. Night and Travel can keep the Mac awake with the lid closed."
+                detail: "Power Protect is not needed on this Mac."
             )
         }
-        let prerequisitesPass = report.amphetamineInstalled
-            && report.supportedVersion
-            && report.automation == .passed
-            && report.triggers == .passed
-        let sessionIsActive = report.amphetamineSessionIsActive == true
-        if let actionFailure {
-            let retryDetail: String
-            if sessionIsActive {
-                retryDetail = " Wait for the one-minute check session to end, or turn the session Off, then run the check again."
-            } else if !prerequisitesPass {
-                retryDetail = " Complete the checks above before you retry."
-            } else {
-                retryDetail = ""
-            }
+        guard report.powerProtect.isInstalled else {
             return row(
-                title: RowTitle.closedLid,
+                title: RowTitle.powerProtect,
                 indicator: .needsAction,
-                detail: actionFailure + retryDetail,
-                action: .runClosedLidCheck,
-                actionIsEnabled: prerequisitesPass && !sessionIsActive
-            )
-        }
-        guard prerequisitesPass else {
-            return row(
-                title: RowTitle.closedLid,
-                indicator: .notChecked,
-                detail: "Run this once the checks above pass. It verifies that Amphetamine can keep the Mac awake with the lid closed.",
-                action: .runClosedLidCheck,
-                actionIsEnabled: false
-            )
-        }
-        guard !sessionIsActive else {
-            return row(
-                title: RowTitle.closedLid,
-                indicator: .notChecked,
-                detail: "An Amphetamine session is active. Turn the current session Off, then run this check.",
-                action: .runClosedLidCheck,
-                actionIsEnabled: false
+                detail: "Install it so Night and Travel survive a power or display disconnect.",
+                action: .getPowerProtect
             )
         }
         return row(
-            title: RowTitle.closedLid,
-            indicator: .notChecked,
-            detail: "Starts a one-minute Amphetamine session and verifies closed-display mode. You do not need to close the lid. The session ends on its own.",
-            action: .runClosedLidCheck
+            title: RowTitle.powerProtect,
+            indicator: .complete,
+            detail: "Power Protect is installed."
         )
     }
 
@@ -294,7 +291,7 @@ public struct SetupStatusPresentation: Equatable, Sendable {
         switch indicator {
         case .complete: "Complete"
         case .needsAction: "Needs action"
-        case .notChecked: "Not checked yet"
+        case .notChecked: "Not checked"
         }
     }
 }

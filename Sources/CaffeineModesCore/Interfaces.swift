@@ -20,6 +20,18 @@ public protocol ScreenLockPolicyChecking: AnyObject {
     func hasImmediateScreenLock(timeout: TimeInterval) throws -> Bool
 }
 
+public protocol ScreenLockStateInspecting: AnyObject {
+    func screenIsLocked() throws -> Bool
+}
+
+public protocol PowerProtectInspecting: AnyObject {
+    func inspect() -> PowerProtectStatus
+}
+
+public protocol LidStateInspecting: AnyObject {
+    func lidState() -> LidState
+}
+
 public protocol DisplaySleeping: AnyObject {
     func sleepDisplay(timeout: TimeInterval) throws
 }
@@ -29,6 +41,7 @@ public protocol ModeStateStoring: AnyObject {
     var ownedSessionSignature: OwnedSessionSignature? { get set }
     var closedDisplayReadinessPassed: Bool { get set }
     var launchAtLoginPromptWasShown: Bool { get set }
+    var postUnlockMode: PostUnlockMode { get set }
 }
 
 public protocol TimeProviding: AnyObject {
@@ -55,6 +68,8 @@ public protocol ModeControlling: AnyObject {
     func setupReport() -> SetupReport
     func disableTriggers() throws
     func runClosedDisplayReadinessTest(authorizingSessionReplacement: Bool) throws
+    func handleScreenUnlocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot
+    func resleepAwayModeIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot
     func hasActiveSessionForQuit() throws -> Bool
     func endActiveSessionForQuit() throws
 }

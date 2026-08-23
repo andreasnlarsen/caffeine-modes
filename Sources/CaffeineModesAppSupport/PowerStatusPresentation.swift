@@ -42,28 +42,28 @@ public struct PowerStatusPresentation: Equatable, Sendable {
                     facts.append("Automatic sleep blocked by \(formattedNames(systemBlockers))")
                 }
                 if facts.count == 1 {
-                    facts.append("Display and automatic sleep follow macOS settings")
+                    facts.append("Follows macOS")
                 }
                 statusLine = facts.joined(separator: " · ")
             }
         case .work:
-            statusLine = "Work · Display stays on · Normal lid behavior"
+            statusLine = "Work · Mac and displays stay awake"
         case .night:
             if report == nil {
-                statusLine = "Night · Display status unavailable · Runs with lid closed"
+                statusLine = "Night · Display status unavailable"
             } else {
                 statusLine = displayBlockers.isEmpty
-                    ? "Night · Display sleeps · Runs with lid closed"
-                    : "Night · Display kept on by \(formattedNames(displayBlockers)) · Runs with lid closed"
+                    ? "Night · Mac working while locked"
+                    : "Night · Display kept on by \(formattedNames(displayBlockers))"
             }
         case .travel:
             let countdown = TravelCountdownFormatter.string(seconds: max(0, travelSecondsRemaining ?? 0))
             if report == nil {
-                statusLine = "Travel · \(countdown) remaining · Display status unavailable · Runs with lid closed"
+                statusLine = "Travel · \(countdown) left · Display status unavailable"
             } else {
                 statusLine = displayBlockers.isEmpty
-                    ? "Travel · \(countdown) remaining · Display sleeps · Runs with lid closed"
-                    : "Travel · \(countdown) remaining · Display kept on by \(formattedNames(displayBlockers)) · Runs with lid closed"
+                    ? "Travel · \(countdown) left · Mac working while locked"
+                    : "Travel · \(countdown) left · Display kept on by \(formattedNames(displayBlockers))"
             }
         case .custom:
             statusLine = "Custom Amphetamine session"
@@ -75,7 +75,7 @@ public struct PowerStatusPresentation: Equatable, Sendable {
             empty: mode == .work ? "kept on by Work" : "no external process blocker detected"
         )
         let systemDetail = blockerDetail(
-            label: "Automatic system sleep",
+            label: "Automatic sleep",
             processes: systemBlockers,
             empty: modeKeepsSystemAwake(mode)
                 ? "kept awake by the selected mode"

@@ -9,7 +9,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let store: ModeStateStoring
     private let launchManager: LaunchAtLoginManaging
     private let requestQuit: () -> Void
-    private let setupWindow: SetupWindowController
+    private let settingsWindow: SettingsWindowController
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private let statusLine = NSMenuItem(title: "Checking status…", action: nil, keyEquivalent: "")
@@ -18,9 +18,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var modeItems: [OperatingModeKey: NSMenuItem] = [:]
     private var snapshot = ModeSnapshot(requestedMode: .off, observedState: nil, ownershipMarker: nil, health: .setupIncomplete)
     private var powerReport: PowerAssertionReport?
+    private var lifecycleError = LifecycleErrorState()
     private var refreshCoordinator = RefreshRequestCoordinator()
     private var transitionInProgress = false
     private var timer: Timer?
+    private var hasObservedSnapshot = false
+    private var lastObservationWasRestoredSession = false
+    private var postUnlockChoice = PostUnlockChoiceState()
+    private weak var observedModalWindow: NSWindow?
+    private var modalDismissalObservers: [NSObjectProtocol] = []
+    var onModeObserved: ((ModeSnapshot, Bool) -> Void)? {
+        didSet {
+            if hasObservedSnapshot {
+                onModeObserved?(snapshot, lastObservationWasRestoredSession)
+            }
+        }
+    }
     private lazy var modeSelectionCoordinator = ModeSelectionCoordinator(
         transition: { [controllerRunner] mode, authorization in
             try await controllerRunner.transition(
@@ -47,13 +60,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.store = store
         self.launchManager = launchManager
         self.requestQuit = requestQuit
-        self.setupWindow = SetupWindowController(controller: controller)
+        self.settingsWindow = SettingsWindowController(
+            controller: controller,
+            store: store,
+            launchManager: launchManager
+        )
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
-        setupWindow.onSetupCompleted = { [weak self] in
+        settingsWindow.onSetupCompleted = { [weak self] in
             self?.showLaunchAtLoginPromptIfNeeded()
         }
-        setupWindow.onWorkFinished = { [weak self] in
+        settingsWindow.onWorkFinished = { [weak self] in
             self?.refresh()
         }
         configureMenu()
@@ -64,7 +81,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func showSetupIfNeeded() {
-        setupWindow.checkAndShowIfNeeded { [weak self] isReady in
+        settingsWindow.checkAndShowIfNeeded { [weak self] isReady in
             guard let self else { return }
             if isReady {
                 self.showLaunchAtLoginPromptIfNeeded()
@@ -114,9 +131,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(travel)
         menu.addItem(.separator())
 
-        let setup = NSMenuItem(title: "Setup Status…", action: #selector(showSetup), keyEquivalent: ",")
-        setup.target = self
-        menu.addItem(setup)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        let modesHelp = NSMenuItem(title: "How Modes Work…", action: #selector(showModesHelp), keyEquivalent: "")
+        modesHelp.target = self
+        menu.addItem(modesHelp)
         launchItem.target = self
         menu.addItem(launchItem)
 
@@ -158,8 +178,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         select(.travel(durationMinutes: sender.tag, expiresAt: Date()))
     }
 
-    private func select(_ mode: OperatingMode) {
-        guard !setupWindow.isBusy, !transitionInProgress else { return }
+    private func select(
+        _ mode: OperatingMode,
+        postUnlockOwnershipID: UUID? = nil
+    ) {
+        guard !settingsWindow.isBusy, !transitionInProgress else { return }
         transitionInProgress = true
         statusLine.title = "Checking \(mode.displayName)…"
         updateMenuAvailability()
@@ -168,8 +191,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             do {
                 if let selected = try await self.modeSelectionCoordinator.select(mode) {
                     self.snapshot = selected
+                    self.lifecycleError.clear()
+                    self.publishModeObservation(selected)
+                } else if let postUnlockOwnershipID {
+                    self.postUnlockChoice.cancelPresentation(for: postUnlockOwnershipID)
                 }
             } catch {
+                if let postUnlockOwnershipID {
+                    self.postUnlockChoice.transitionFailed(for: postUnlockOwnershipID)
+                }
                 self.showError(error)
             }
             self.transitionInProgress = false
@@ -189,8 +219,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    @objc private func showSetup() {
-        setupWindow.showWindow(nil)
+    @objc private func showSettings() {
+        settingsWindow.showWindow(nil)
+    }
+
+    @objc private func showModesHelp() {
+        settingsWindow.show(pane: .modes)
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -205,7 +239,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Caffeine Modes"
-        alert.informativeText = "Three safe Amphetamine modes for work, night, and short travel.\n\nTravel is not thermal protection. Do not run a Mac in an enclosed bag."
+        alert.informativeText = "Three clear Amphetamine modes for work, night, and short travel.\n\nDo not run a closed Mac inside an enclosed bag."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -219,6 +253,42 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
+    func lifecycleDidFinish(
+        snapshot: ModeSnapshot?,
+        error: Error?,
+        operation: ScreenLifecycleController.Operation.Kind
+    ) {
+        if let snapshot {
+            self.snapshot = snapshot
+            if LifecycleObservationPolicy.accepts(snapshot) {
+                publishModeObservation(snapshot)
+            }
+            requestPostUnlockChoiceIfNeeded(snapshot)
+        }
+        let failure = error.map {
+            ($0 as? LocalizedError)?.errorDescription ?? $0.localizedDescription
+        }
+        if error == nil {
+            lifecycleError.noteSuccessfulLifecycleCheck()
+            if operation == .resleep {
+                lifecycleError.noteSuccessfulResleep()
+            }
+        }
+        let requiresSuccessfulLifecycleCheck: Bool
+        if case .screenLockStateUnavailable = error as? ModeControlError {
+            requiresSuccessfulLifecycleCheck = true
+        } else {
+            requiresSuccessfulLifecycleCheck = false
+        }
+        lifecycleError.recordFailure(
+            failure,
+            at: Date(),
+            requiresSuccessfulLifecycleCheck: requiresSuccessfulLifecycleCheck,
+            requiresSuccessfulResleep: operation == .resleep
+        )
+        refresh()
+    }
+
     var hasControllerWorkInProgress: Bool {
         menuActivity.hasControllerWorkInProgress
     }
@@ -227,7 +297,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "Caffeine Modes Is Busy"
-        alert.informativeText = "Wait for the current status or setup check to finish before you quit Caffeine Modes."
+        alert.informativeText = "Wait for the current task to finish before you quit Caffeine Modes."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -262,7 +332,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func refresh() {
-        let blocked = setupWindow.isBusy || transitionInProgress
+        let blocked = settingsWindow.isBusy || transitionInProgress
         guard refreshCoordinator.request(blocked: blocked) else {
             updateMenuAvailability()
             return
@@ -274,8 +344,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if self.menuActivity.acceptsRefreshResults {
                 self.snapshot = snapshot
                 self.powerReport = report
+                self.lifecycleError.refresh(
+                    snapshot: snapshot,
+                    report: report,
+                    now: Date()
+                )
+                if LifecycleObservationPolicy.accepts(snapshot) {
+                    self.publishModeObservation(
+                        snapshot,
+                        restoredSession: !self.hasObservedSnapshot && snapshot.requestedMode.isAwayMode
+                    )
+                }
                 self.updateCheckmarks()
                 self.updateStatus()
+                self.presentPendingPostUnlockChoiceIfPossible(snapshot)
             }
             self.launchItem.state = self.launchManager.isEnabled ? .on : .off
             self.updateMenuAvailability()
@@ -291,9 +373,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         quitItem.isEnabled = activity.quitIsEnabled
     }
 
+    private func publishModeObservation(
+        _ snapshot: ModeSnapshot,
+        restoredSession: Bool = false
+    ) {
+        let awayOwnershipID = snapshot.requestedMode.isAwayMode
+            ? snapshot.ownershipMarker?.id
+            : nil
+        postUnlockChoice.modeDidChange(awayOwnershipID: awayOwnershipID)
+        hasObservedSnapshot = true
+        lastObservationWasRestoredSession = restoredSession
+        onModeObserved?(snapshot, restoredSession)
+    }
+
     private var menuActivity: MenuActivityPolicy {
         MenuActivityPolicy(
-            setupIsBusy: setupWindow.isBusy,
+            setupIsBusy: settingsWindow.isBusy,
             transitionIsInProgress: transitionInProgress,
             refreshIsInProgress: refreshCoordinator.isInProgress
         )
@@ -309,14 +404,33 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let title: String
         let toolTip: String
         let symbol: String
-        if snapshot.health != .ready && snapshot.requestedMode != .custom {
+        if snapshot.requestedMode.isAwayMode,
+           snapshot.ownershipMarker?.id == postUnlockChoice.activeOwnershipID {
+            title = "\(snapshot.requestedMode.displayName) is still active · Choose Off or Work"
+            toolTip = "Caffeine Modes — \(title)"
+            symbol = "exclamationmark.circle"
+        } else if let lifecycleError = lifecycleError.message {
+            title = lifecycleError
+            toolTip = "Caffeine Modes — \(lifecycleError)"
+            symbol = "exclamationmark.triangle.fill"
+            self.lifecycleError.markPresented()
+        } else if snapshot.health != .ready && snapshot.requestedMode != .custom {
             title = snapshot.detail ?? "Setup needs attention"
             toolTip = "Caffeine Modes — \(title)"
             symbol = "exclamationmark.triangle.fill"
         } else if snapshot.requestedMode == .custom {
-            title = snapshot.detail ?? "Custom Amphetamine session"
-            toolTip = "Caffeine Modes — \(title)"
-            symbol = "exclamationmark.triangle.fill"
+            if snapshot.health == .ready,
+               snapshot.ownershipMarker?.purpose == .readinessTest,
+               case let .travel(_, expiresAt)? = snapshot.ownershipMarker?.mode {
+                let seconds = max(0, Int(expiresAt.timeIntervalSinceNow.rounded(.up)))
+                title = "Closed-lid diagnostic passed · Ends in \(TravelCountdownFormatter.string(seconds: seconds))"
+                toolTip = "Caffeine Modes — \(title)"
+                symbol = "hourglass"
+            } else {
+                title = snapshot.detail ?? "Custom Amphetamine session"
+                toolTip = "Caffeine Modes — \(title)"
+                symbol = "exclamationmark.triangle.fill"
+            }
         } else {
             let travelSeconds: Int?
             if case let .travel(_, expiresAt) = snapshot.requestedMode {
@@ -349,6 +463,79 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         image?.isTemplate = true
         statusItem.button?.image = image
+    }
+
+    private func requestPostUnlockChoiceIfNeeded(_ snapshot: ModeSnapshot) {
+        guard snapshot.requiresPostUnlockChoice,
+              let ownershipID = snapshot.ownershipMarker?.id
+        else { return }
+        postUnlockChoice.request(for: ownershipID)
+        updateStatus()
+        presentPendingPostUnlockChoiceIfPossible(snapshot)
+    }
+
+    private func presentPendingPostUnlockChoiceIfPossible(_ snapshot: ModeSnapshot) {
+        let modalWindow = NSApplication.shared.modalWindow
+        let isBusy = PostUnlockPresentationPolicy.isBusy(
+            setupIsBusy: settingsWindow.isBusy,
+            transitionIsInProgress: transitionInProgress,
+            modalWindowIsOpen: modalWindow != nil
+        )
+        guard snapshot.requestedMode.isAwayMode,
+              let currentOwnershipID = snapshot.ownershipMarker?.id,
+              currentOwnershipID == postUnlockChoice.activeOwnershipID
+        else { return }
+        if let modalWindow {
+            observeModalDismissal(modalWindow)
+        }
+        guard let ownershipID = postUnlockChoice.presentationIfReady(
+            isBusy: isBusy,
+            prepareForPresentation: {
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+        ) else { return }
+        let mode: OperatingMode = store.postUnlockMode == .work ? .work : .off
+        select(mode, postUnlockOwnershipID: ownershipID)
+    }
+
+    private func observeModalDismissal(_ window: NSWindow) {
+        guard observedModalWindow !== window else { return }
+        stopObservingModalDismissal()
+        observedModalWindow = window
+        let windowID = ObjectIdentifier(window)
+        let center = NotificationCenter.default
+        for name in [
+            NSWindow.didResignKeyNotification,
+            NSWindow.willCloseNotification,
+            NSWindow.didEndSheetNotification
+        ] {
+            modalDismissalObservers.append(
+                center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            self?.modalWindowDidDismiss(windowID)
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    private func modalWindowDidDismiss(_ windowID: ObjectIdentifier) {
+        guard observedModalWindow.map(ObjectIdentifier.init) == windowID else { return }
+        stopObservingModalDismissal()
+        if let nextModalWindow = NSApplication.shared.modalWindow {
+            observeModalDismissal(nextModalWindow)
+        } else {
+            presentPendingPostUnlockChoiceIfPossible(snapshot)
+        }
+    }
+
+    private func stopObservingModalDismissal() {
+        let center = NotificationCenter.default
+        modalDismissalObservers.forEach(center.removeObserver)
+        modalDismissalObservers.removeAll()
+        observedModalWindow = nil
     }
 
     private func showError(_ error: Error) {

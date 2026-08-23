@@ -2,9 +2,9 @@
 
 Status: Active implementation contract
 
-Version: 1.0.2
+Version: 1.1.0
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 ## 1. Goal
 
@@ -27,15 +27,17 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 ## 4. User Stories / Behaviors
 
 - As a user, I can select Off and restore normal macOS sleep behavior.
-- As a user, I can select Work and keep the Mac and display awake while the lid follows normal behavior.
-- As a user, I can select Night and let the display sleep while the Mac stays awake with the lid closed.
-- As a user, I can select Travel for 30, 60, 90, or 120 minutes. The session ends in Amphetamine even if Caffeine Modes stops.
-- As a user, I see a diagnostic status for an incomplete operation, an active readiness test, or an active Amphetamine policy that does not match the stored Caffeine Modes projection.
+- As a user, I can select Work and keep the Mac and all connected displays awake while the lid follows normal macOS behavior.
+- As a user, I can select Night and turn off all displays while the locked Mac keeps working. After I unlock, Caffeine Modes asks before it changes the active session.
+- As a user, I can select Travel for 30, 60, 90, or 120 minutes. It behaves like Night and expires through Amphetamine if Caffeine Modes stops. After I unlock, Caffeine Modes asks before it changes the active session.
+- As a user, a key press can show the lock screen without ending Night or Travel. If I stay locked, Caffeine Modes turns the displays off again after 30 seconds.
+- As a user, I see a diagnostic status for an incomplete operation, an optional developer diagnostic, or an active Amphetamine policy that does not match the stored Caffeine Modes projection.
 - As a user, I must confirm before Caffeine Modes ends or replaces any active Amphetamine session.
 - As a user, I must confirm every Work, Night, or Travel start. This confirmation also authorizes replacement if another Amphetamine session appears after the preflight check.
 - As a user, I see the process name when another app blocks display sleep.
 - As a user, I can tell whether a process blocks display sleep, automatic system sleep, or disk idle sleep. These facts are never reduced to the phrase "Mac held awake."
-- As a user, I can verify setup and control Launch at Login from the menu.
+- As a user, Settings gives me General, Setup, and Modes tabs. A hidden Developer tab contains the optional one-minute diagnostic.
+- As a user, I can choose Off or Work as the suggested action after I unlock Night or Travel. Off is the default. I still confirm the change.
 - As a user, Quit lets me end the active session or leave it running. If I choose to end it, the app stays open when Off cannot be verified.
 - As a user, logout, restart, and shutdown do not wait for a Caffeine Modes prompt or Amphetamine command.
 
@@ -44,12 +46,12 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 ### P0
 
 - REQ-001 — Repository and artifacts. Acceptance: The root contains one active `SPEC.md`, `DESIGN_SYSTEM.md`, `README.md`, SwiftPM core, app-support, app, and test targets, release scripts, and a git repository on `main`.
-- REQ-002 — Guided setup. Acceptance: Setup reports Amphetamine presence and version, Automation access, Trigger state, immediate screen-lock policy, and closed-display readiness as separate deterministic results. The Amphetamine read and screen-lock query each use an independent bounded deadline. The one-minute readiness test expires through Amphetamine and is never ended automatically by Caffeine Modes. Its stored expiry is anchored to Amphetamine's freshly observed remaining timer after the start command returns.
+- REQ-002 — Guided setup. Acceptance: Setup reports Amphetamine presence and version, Automation access, Trigger state, immediate screen-lock policy, and Power Protect availability as separate deterministic results. Every problem row includes its matching action. The Amphetamine read and screen-lock query each use an independent bounded deadline. No one-minute session blocks normal use. The optional Developer diagnostic expires through Amphetamine and never counts toward Setup readiness.
 - REQ-003 — Mode reconciliation. Acceptance: Off, Work, Night, Travel, and Custom are mutually exclusive projections of Amphetamine state plus one stored diagnostic session signature.
-- REQ-004 — Night transition. Acceptance: Night blocks named external display assertions before mutation, applies its Amphetamine policy, verifies that policy, and only then requests display sleep. Automatic-system-sleep and disk-idle assertions remain observational and never block Night or Travel.
-- REQ-005 — Travel transition. Acceptance: Travel accepts only 30, 60, 90, or 120 minutes, stores its expiry, uses an Amphetamine timed session, and reconciles to Off when that session expires.
-- REQ-006 — Session safety and failure. Acceptance: A stored signature never authorizes a destructive action. Every Work, Night, or Travel start and active-session replacement needs an explicit user choice that names the target mode and the selected Travel duration when applicable. Every active-session end needs an explicit user choice that names Off. The destructive Quit choice is named Turn Off and Quit. App-layer tests execute every mode-start, replacement, external user Quit, and system Quit route. If Quit cannot inspect Amphetamine, it offers only Leave Amphetamine Unchanged and Quit or Cancel; Turn Off is unavailable. User Quit never reads or mutates an unsupported Amphetamine version. Only verified logout, restart, or shutdown signals bypass reads, prompts, and mutation. Relaunch, partial failure, and user Quit never silently end an active session, and an unverifiable session mutation appears as Custom with backend mismatch health.
-- REQ-007 — Native menu app. Acceptance: The `NSStatusItem` menu, template icon, setup access, countdown, actual mode checkmark, and `SMAppService.mainApp` Launch at Login toggle reflect observed state. Off reports external display and automatic-system-sleep blockers as distinct facts. Disk-idle blockers appear only in the tooltip. Setup and menu orchestration run on serial worker queues. Only the bounded `NSAppleScript` boundary returns to the main thread, as required by Apple.
+- REQ-004 — Night transition and wake lifecycle. Acceptance: Night blocks named external display assertions before mutation, applies its Amphetamine policy, verifies that policy, and only then requests display sleep. A screen wake while still locked keeps Night active and causes one verified re-sleep request after 30 seconds. Each new screen-visibility event gets at most one bounded retry after another 30 seconds if that re-sleep fails. A verified unlock performs no Amphetamine mutation. It asks the user to confirm the saved Off or Work suggestion. Automatic-system-sleep and disk-idle assertions remain observational.
+- REQ-005 — Travel transition. Acceptance: Travel accepts only 30, 60, 90, or 120 minutes, stores its expiry, uses an Amphetamine timed session, follows the same wake and unlock lifecycle as Night, and reconciles to Off when its backend timer expires.
+- REQ-006 — Session and clamshell safety. Acceptance: A stored signature never authorizes a destructive user action. Every manual Work, Night, or Travel start and active-session replacement needs an explicit user choice. An unlock signal is read-only. The saved post-unlock setting selects which confirmation appears first, but it never authorizes a mutation. A new active mode starts only after any replaced session is ended and Off is verified. Work never disables closed-display mode after its session starts. If an inactive closed-display default must be normalized, the lid must be verified open before mutation. Relaunch, partial failure, user Quit, and automatic lifecycle handling never silently mutate an unowned session.
+- REQ-007 — Native menu and Settings app. Acceptance: The `NSStatusItem` menu, template icon, Settings access, How Modes Work access, countdown, actual mode checkmark, and `SMAppService.mainApp` Launch at Login toggle reflect observed state. Settings uses General, Setup, and Modes toolbar tabs. Developer appears only when Settings opens with Option held. Off reports display and system-sleep blockers as distinct facts; disk-idle blockers appear only in the tooltip. Controller work runs on serial worker queues.
 - REQ-008 — Boundary limits. Acceptance: The repository contains no root helper, Accessibility request, direct Amphetamine preference edit, `osascript` process, `pmset disablesleep`, or unrelated external-process termination path.
 - REQ-009 — Release artifact. Acceptance: The DMG contains an arm64 and x86_64 app with hardened runtime, LEAD MEDIA AS Developer ID signing, accepted notarization, a staple ticket, and passing Gatekeeper assessment.
 
@@ -100,6 +102,7 @@ Scripts/verify-release.sh
 - NFR-008: A timed child process reserves cleanup time inside its original deadline. Termination and kill cleanup cannot extend that deadline.
 - NFR-009: At most one IOKit assertion inspection can be in flight. A caller joins an existing inspection within its own deadline. If that inspection finishes in time, the joined caller then obtains a fresh snapshot within the same deadline.
 - NFR-010: Setup checks, status reads, and mode-transition orchestration execute on serial worker queues. The bounded `NSAppleScript` creation, execution, and reply parsing execute on the main thread because Apple marks that class main-thread-only. No AppleScript descriptor crosses the thread boundary. IOKit inspection, device-policy reads, and fixed process invocations remain off the main thread.
+- NFR-011: Screen lifecycle handling is event-driven. It has no idle polling loop. A screen-wake timer covers the 30-second locked-screen window. Each new screen-visibility event can add one 30-second timer after a failed re-sleep. That timer never repeats.
 
 ## 8. Constraints
 
@@ -110,6 +113,7 @@ Scripts/verify-release.sh
 - The current device grace period is the primary screen-lock policy source. On macOS 26 and later, the app reads the same local MobileKeyBag value as Lock Screen settings because `sysadminctl` can report a stale legacy value. Missing or malformed data fails closed. On older systems only, `sysadminctl -screenLock status` is the bounded fallback.
 - Signing uses team `D79LWN85PJ` and bundle ID `com.andreaslar.caffeinemodes`.
 - Version 1 uses a manually delivered notarized DMG.
+- Apple Silicon Night and Travel require Amphetamine Power Protect. The app checks the two documented local installation files without modifying them.
 - Architecture dependencies are mirrored in Constraints and Build vs Buy.
 
 ## 9. Build vs Buy Decisions
@@ -117,7 +121,7 @@ Scripts/verify-release.sh
 | Capability | Decision | Reason |
 |---|---|---|
 | Power session backend | Buy/use Amphetamine | It already owns the privileged closed-display setup and timed-session behavior. |
-| Menu and setup UI | Build with AppKit | The interface is small and must reflect the product state model. |
+| Menu and Settings UI | Build with AppKit | The interface is small and must reflect the product state model. |
 | Login item | Use ServiceManagement | `SMAppService.mainApp` is the supported macOS API. |
 | Power assertion inspection | Use IOKit | It provides a read-only process-level source for blockers. |
 | Screen-lock policy | Read the local device grace period; use `sysadminctl` only as a pre-macOS-26 fallback | The product must match current Lock Screen settings and fail closed when the policy is not immediate. |
@@ -131,7 +135,7 @@ Scripts/verify-release.sh
 - `CaffeineModesCore` contains the domain, session-safety rules, transition sequence, and persistence interface. `CaffeineModesCoreTests` tests both core and app-support behavior.
 - `CaffeineModesAppSupport` contains testable setup, power-status, menu-selection, and application-termination presentation logic. It has no AppKit dependency.
 - `CaffeineModesApp` contains the AppKit UI and macOS adapters.
-- `AmphetamineControlling`, `PowerAssertionInspecting`, `ScreenLockPolicyChecking`, `DisplaySleeping`, and `ModeStateStoring` are narrow replaceable seams for verified external boundaries.
+- `AmphetamineControlling`, `PowerAssertionInspecting`, `ScreenLockPolicyChecking`, `ScreenLockStateInspecting`, `PowerProtectInspecting`, `LidStateInspecting`, `DisplaySleeping`, and `ModeStateStoring` are narrow replaceable seams for verified external boundaries.
 - The app does not add extension registries, backend factories, or alternate power logic in version 1.
 
 ### Domain vocabulary
@@ -148,7 +152,7 @@ Scripts/verify-release.sh
 
 - Canonical owner: `ModeController` is the only mutator of operating-mode transitions.
 - Amphetamine is the system of record for active power assertions.
-- `UserDefaultsModeStore` is the system of record for onboarding flags, last requested mode, Travel expiry, and the diagnostic session signature only.
+- `UserDefaultsModeStore` is the system of record for onboarding flags, post-unlock preference, last requested mode, Travel expiry, and the diagnostic session signature only.
 - `LaunchAtLoginManager` is the one mutator for login-item registration.
 - No business rule has two owners.
 
@@ -160,7 +164,8 @@ Scripts/verify-release.sh
 | Requested mode and diagnostic projection | `ModeStateStoring` | `ModeController` after verification |
 | Display-sleep request | macOS | `ModeController` through `DisplaySleeping` after verification |
 | Launch at Login | `SMAppService.mainApp.status` | `LaunchAtLoginManager` |
-| Setup readiness flag | `ModeStateStoring` | Closed-display readiness test only |
+| Suggested post-unlock action | `ModeStateStoring` | Settings General tab |
+| Developer diagnostic flag | `ModeStateStoring` | Optional closed-lid diagnostic only |
 
 ### Changeability and replacement strategy
 
@@ -174,18 +179,21 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 - Work: Infinite active session, display sleep prevented, closed-display mode disabled.
 - Night: Infinite active session, display sleep allowed, closed-display mode enabled.
 - Travel: Timed active session, display sleep allowed, closed-display mode enabled, expiry stored.
-- Custom: A readiness test, an incomplete operation, an unverified state, or an active Amphetamine session without a matching committed Work, Night, or Travel projection.
+- Custom: An optional developer diagnostic, an incomplete operation, an unverified state, or an active Amphetamine session without a matching committed Work, Night, or Travel projection.
 
 ### Valid transitions and triggers
 
 | From | Trigger | To | Finalizing path |
 |---|---|---|---|
 | Any active state | User confirms Off | Off | End, query, verify inactive, clear marker |
-| Off or active state | User confirms Work | Work | Preflight, authorized start, normalize closed-display policy, query, commit |
-| Off or active state | User confirms Night | Night | Preflight, authorized start, normalize, query, commit, sleep display |
-| Off or active state | User confirms Travel duration | Travel | Preflight, authorized timed start, normalize, query, commit, sleep display |
-| Off | User confirms closed-display readiness test | Custom with ready health | Verify Off, authorized one-minute start, enable closed-display mode, query, store readiness-test signature |
-| Readiness test | Amphetamine timer expires | Off | Reconcile observes inactive and clears marker |
+| Off or active state | User confirms Work | Work | Preflight, end and verify any replaced session, normalize the inactive closed-display default when safe, start, query, commit |
+| Off or active state | User confirms Night | Night | Preflight, end and verify any replaced session, start, enable closed-display mode, query, commit, sleep all displays |
+| Off or active state | User confirms Travel duration | Travel | Preflight, end and verify any replaced session, timed start, enable closed-display mode, query, commit, sleep all displays |
+| Night or Travel | Display wakes but Mac remains locked | Same mode | Arm a 30-second deadline, re-verify mode, ownership, lock state, and display blockers, then request display sleep |
+| Night or Travel | Mac unlocks | Same mode until confirmation | Verify unlocked state without mutation, then ask the user to confirm the saved Off or Work suggestion |
+| Night or Travel after unlock | User confirms Off or Work | Off or Work | Use the normal confirmed transition path; end and verify the current session before any new session starts |
+| Off | User confirms optional Developer diagnostic | Custom with ready health | Verify Off, authorized one-minute start, enable closed-display mode, query, store diagnostic signature |
+| Developer diagnostic | Amphetamine timer expires | Off | Reconcile observes inactive and clears marker |
 | Travel | Amphetamine timer expires | Off | Reconcile observes inactive and clears marker |
 | Projected active state | An observable policy or timer changes | Custom | Reconcile invalidates the projection |
 | Any active state | Quit and choose Turn Off and Quit | Off then terminate | End and verify; a failure cancels Quit |
@@ -199,6 +207,8 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 - Reconcile is read-only except for correcting stored projections and stale diagnostic markers.
 - Every Work, Night, and Travel selection asks for confirmation before its start command. This authorization remains valid if an Amphetamine session appears between the read-only preflight and the start command.
 - Repeating a selection uses the same confirmation, then replaces the active session with the same verified policy.
+- A replacement ends the prior session and verifies Off before it starts the new session.
+- Work starts only from a verified inactive state whose closed-display default is off. Work never sends a closed-display disable command after its session starts.
 - Travel expiry is finalized by Amphetamine, so it survives an app crash.
 - After a partial command failure, no display-sleep request runs. The app re-queries and reports Custom/backend mismatch.
 - Before a Night or Travel display-sleep request, the app persists a pending-cleanup marker with the observed display policy, closed-display policy, and timer. It promotes that marker only after display sleep succeeds.
@@ -206,18 +216,19 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 - After a failed Amphetamine session-start, session-end, closed-display, or Trigger command, the app attempts a fresh observation inside the original deadline because an error can follow a partial mutation. Every mutation receives a timeout that reserves 0.5 seconds inside that deadline for verification or recovery. If that reserve is unavailable, the mutation does not start. An unconfirmed start never creates or restores a projection.
 - After a start command returns successfully, the app persists a pending-cleanup signature before any later fallible command. A same-deadline recovery observation replaces it only when the state is compatible with the requested start policy.
 - Transition recovery uses the original two-second deadline. It never starts a second recovery budget.
-- Failed-start and readiness recovery never end an active state. Every failed readiness mutation gets one fresh-observation attempt inside the original readiness deadline. A confirmed start retains a compatible observed pending-cleanup projection when recovery succeeds. If the recovery read cannot finish, it retains the bounded provisional projection written after the confirmed start. An unconfirmed start remains unprojected. The readiness test uses a one-minute Amphetamine timer and leaves it to expire. Its projection anchors expiry to the freshly observed remaining timer after start. A successful test uses a distinct readiness-test signature with ready health. A failed test clears that success projection and reports Custom/backend mismatch with the failure reason.
+- Failed-start and diagnostic recovery use one fresh-observation attempt inside the original deadline. A confirmed start retains a compatible observed pending-cleanup projection when recovery succeeds. If the recovery read cannot finish, it retains the bounded provisional projection written after the confirmed start. An unconfirmed start remains unprojected. The optional diagnostic uses a one-minute Amphetamine timer and leaves it to expire. Its projection anchors expiry to the freshly observed remaining timer after start. It never gates Setup, Night, or Travel.
 - A failed user-authorized Quit end command uses the original deadline to re-observe Amphetamine. Verified Off completes Quit. Any active or unobservable result keeps the app open and reports Custom/backend mismatch.
-- The readiness-test confirmation states that its timed start may replace an Amphetamine session that appears after the Off check.
+- The Developer diagnostic confirmation states that its timed start may replace an Amphetamine session that appears after the Off check.
 - Amphetamine 5.3.2 exposes policy and timer values but no stable session identifier. A stored signature is never destructive authority. Even a matching active state needs confirmation before it can be ended or replaced.
 - A relaunch reconstructs the projection from Amphetamine plus the stored signature.
 
 ### Forbidden transitions
 
 - Custom cannot be selected as a command.
-- Work, Night, Travel, and the readiness test cannot start without explicit user authorization.
+- Work, Night, Travel, and the Developer diagnostic cannot start without explicit user authorization. No mode starts or ends automatically after unlock.
 - No active session can be ended or replaced without an explicit user confirmation.
-- Night or Travel cannot start with failed setup, a non-immediate lock policy, or a named external display blocker.
+- Night or Travel cannot start with failed setup, missing required Power Protect, a non-immediate lock policy, or a named external display blocker.
+- A closed-lid inactive default cannot be disabled as preparation for Work. The user must open the lid first.
 - Travel cannot be indefinite or use a duration outside 30, 60, 90, and 120 minutes.
 - Quit can leave an active session running. If the user chooses Turn Off and Quit, Quit cannot finish until Off is verified. If session inspection fails, Quit offers only a no-mutation leave-and-quit choice or Cancel.
 - Normal termination requests, including external user Quit requests, use the user Quit flow. A power-off notification or an Apple Event reason for logout, restart, or shutdown selects the system route. The system route cannot open a prompt, read Amphetamine, or block logout, restart, or shutdown.
@@ -227,6 +238,9 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 ```text
 OperatingMode
   off | work | night | travel(durationMinutes, expiresAt) | custom
+
+PostUnlockMode
+  off | work
 
 ControlHealth
   ready | amphetamineMissing | unsupportedVersion | automationDenied
@@ -239,11 +253,16 @@ ModeSnapshot
   health
   blockingProcesses
   detail
+  requiresPostUnlockChoice
 
 PowerAssertionReport
   displaySleepBlockingProcesses
   systemSleepBlockingProcesses
   diskIdleBlockingProcesses
+
+PowerProtectStatus
+  isRequired
+  isInstalled
 
 OwnedSessionSignature
   id
@@ -254,14 +273,16 @@ OwnedSessionSignature
   schemaVersion
 ```
 
-Only `OperatingMode`, the diagnostic `OwnedSessionSignature`, and onboarding flags persist. Observed state and health are live projections. A signature written by version 1.0.0 has no purpose or schema-version field and decodes as a legacy `activeMode`. A matching legacy Travel projection is re-anchored once to Amphetamine's observed remaining timer, then stored in the current format. The migration requires the expected Travel policy and a positive timer no longer than the selected duration. Despite its legacy type name, the signature does not prove identity or authorize an end command.
+Only `OperatingMode`, `PostUnlockMode`, the diagnostic `OwnedSessionSignature`, and onboarding flags persist. `PostUnlockMode` defaults to Off and selects the suggested confirmed action after unlock. Observed state, health, and `requiresPostUnlockChoice` are live projections. A signature written by version 1.0.0 has no purpose or schema-version field and decodes as a legacy `activeMode`. A matching legacy Travel projection is re-anchored once to Amphetamine's observed remaining timer, then stored in the current format. The migration requires the expected Travel policy and a positive timer no longer than the selected duration. Despite its legacy type name, the signature does not prove identity or authorize an end command.
 
 ## 13. Integrations
 
 - Amphetamine: Local Apple Events by bundle ID. Minimum version is 5.3.2.
+- Amphetamine Power Protect: Detect Apple Silicon from the runtime host capability, including when the universal app runs through Rosetta. An unreadable capability fails closed and requires Power Protect. Then use read-only local presence checks for the two files documented by Amphetamine. Missing support blocks Night and Travel and links to the official installer project.
 - IOKit: Read-only `IOPMCopyAssertionsByProcess` inspection behind the shared transition deadline. Assertion types are classified as display sleep, automatic system sleep, or disk idle. Automatic system sleep includes network-client assertions used for active remote connections. Night and Travel consult only the display list. Off reports non-macOS process names for system and disk assertions and omits temporary macOS service assertions. Display assertions remain visible regardless of owner because they can block the requested screen sleep. One shared in-flight operation prevents worker accumulation after a timeout. A safety-critical caller that receives a joined operation's result then uses a new snapshot taken within the same deadline.
 - macOS screen-lock policy: Read-only local device-grace-period query through the Apple-signed MobileKeyBag framework. Zero seconds means immediate. Positive, negative, missing, or malformed values are not accepted as immediate. On macOS 26 and later, the app never trusts `sysadminctl` because its legacy output can disagree with Lock Screen settings. Earlier macOS versions may use bounded, fail-closed `sysadminctl -screenLock status` parsing only when the device-grace-period symbol is unavailable. The private read is acceptable for the Developer ID build but must be reassessed before any Mac App Store work.
 - macOS display sleep: Fixed `pmset displaysleepnow` process invocation.
+- macOS display and lock lifecycle: `NSWorkspace` screen notifications plus the current `CGSessionCopyCurrentDictionary` lock state. The distributed unlock event starts a read-only verification. The app then asks for explicit confirmation before it uses the normal Off or Work transition.
 - ServiceManagement: `SMAppService.mainApp` registration and status.
 - GitHub: Private backup repository at `andreasnlarsen/caffeine-modes` after local GitHub CLI authentication.
 - Apple notarization: The existing Keychain-backed LEAD MEDIA AS `notarytool` profile named `notchfocus-notary` by default.
@@ -286,7 +307,7 @@ MVP contains REQ-001 through REQ-009 only.
 | Amphetamine changes its scripting dictionary | Commands can fail after an update | Enforce the minimum version, use fixed commands, verify every transition, and report mismatch. |
 | Amphetamine does not expose a stable session identifier | A stored policy signature cannot prove which session is active, and a session can appear after preflight | Require confirmation before every start, active-session end, or replacement. Use signatures only for projection and diagnostics. |
 | Automation is denied | State cannot be read or changed | Setup performs a read-only request and links to Automation settings. |
-| Closed-display support needs Amphetamine setup | Night or Travel cannot meet the lid-close policy | Require an explicit bounded readiness test and show Amphetamine’s own prompts. |
+| Power Protect is missing on Apple Silicon | Night or Travel can fail after display or power changes with the lid closed | Block Night and Travel, name the missing support, and link to Amphetamine’s official installer project. |
 | Another app holds a display assertion | Night or Travel leaves the display awake | Detect and name the process before mutation. |
 | IOKit inspection stalls | Repeated refreshes can accumulate blocked workers or a safety transition can inherit an old snapshot | Reuse one in-flight inspection until it completes, then require a joined caller to use a fresh snapshot within its original deadline. |
 | Display sleep does not lock due to policy | Screen contents remain visible | Require immediate policy and fail closed on unknown output. |
@@ -299,7 +320,7 @@ MVP contains REQ-001 through REQ-009 only.
 - Framework: XCTest with fakes for every external boundary.
 - Mandate: Write P0 behavior tests before changing the core transition implementation.
 - Coverage: `CaffeineModesCore` line coverage must be at least 90%.
-- Unit scope: Command order, normalized closed-display semantics, bounded and fresh blocker inspection, permission denial, missing and old Amphetamine, independent setup deadlines, Triggers, lock policy, invalid Travel durations, Travel countdown rounding, partial failures, successful and failed readiness projection, delayed readiness-session creation, Custom projection, legacy signature decoding and Travel timer migration, relaunch, expiry, target-specific start and replacement confirmations, user-versus-system termination routing, explicit Quit choices, failed-inspection Quit choices, and Quit failure.
+- Unit scope: Command order, safe inactive closed-display normalization, lid-state blocking, Power Protect checks, bounded and fresh blocker inspection, permission denial, missing and old Amphetamine, independent setup deadlines, Triggers, lock policy, invalid Travel durations, Travel countdown rounding, partial failures, optional Developer-diagnostic projection, Custom projection, legacy signature decoding and Travel timer migration, relaunch, expiry, screen wake, read-only unlock handling, identical replacement-session safety, post-unlock Off or Work confirmation, target-specific start and replacement confirmations, user-versus-system termination routing, explicit Quit choices, failed-inspection Quit choices, and Quit failure.
 - Static scope: Verify AppKit, IOKit, entitlements, allowed commands, and forbidden mechanisms across every executable project input, including test sources. PATH-resolved and absolute `osascript` calls are rejected. Direct `defaults` executable calls are rejected even when the executable and arguments span multiple lines. Forbidden power arguments are detected across line boundaries. External-process termination spellings are rejected. The only allowed matches are the app's own terminate request and the two exact signals used to stop the child process owned by the bounded runner.
 - Build scope: Build both architectures, create one app bundle, and verify the resulting Mach-O slices.
 - Release scope: Verify Developer ID signature, team ID, hardened runtime, Gatekeeper, notarization, and staple ticket.

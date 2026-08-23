@@ -3,70 +3,151 @@ import CaffeineModesAppSupport
 import CaffeineModesCore
 
 @MainActor
-final class SetupWindowController: NSWindowController, NSWindowDelegate {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
+    enum Pane: String {
+        case general
+        case setup
+        case modes
+        case developer
+
+        var identifier: NSToolbarItem.Identifier { .init(rawValue) }
+
+        var title: String {
+            switch self {
+            case .general: "General"
+            case .setup: "Setup"
+            case .modes: "Modes"
+            case .developer: "Developer"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .general: "gearshape"
+            case .setup: "checklist"
+            case .modes: "cup.and.saucer"
+            case .developer: "wrench.and.screwdriver"
+            }
+        }
+    }
+
     private enum Activity {
         case idle
         case refreshing
         case disablingTriggers
-        case runningClosedLidCheck
+        case runningDiagnostic
     }
 
-    private let runner: SetupCheckRunner
+    private let runner: SettingsCheckRunner
+    private let store: ModeStateStoring
+    private let launchManager: LaunchAtLoginManaging
+
+    private let contentHost = NSView()
+    private var appearanceObservation: NSKeyValueObservation?
+    private lazy var generalView = makeGeneralView()
+    private lazy var setupView = makeSetupView()
+    private lazy var modesView = makeModesView()
+    private lazy var developerView = makeDeveloperView()
+
+    private let launchCheckbox = NSButton(checkboxWithTitle: "Launch at Login", target: nil, action: nil)
+    private let unlockOffButton = NSButton(radioButtonWithTitle: "Off", target: nil, action: nil)
+    private let unlockWorkButton = NSButton(radioButtonWithTitle: "Work", target: nil, action: nil)
+
     private let amphetamineRow = SetupRowView()
     private let automationRow = SetupRowView()
     private let triggersRow = SetupRowView()
     private let screenLockRow = SetupRowView()
-    private let closedLidRow = SetupRowView()
-    private let summaryLabel = NSTextField(labelWithString: "")
-    private let footerSpinner = NSProgressIndicator()
+    private let powerProtectRow = SetupRowView()
+    private let setupSummaryLabel = NSTextField(labelWithString: "")
+    private let setupSpinner = NSProgressIndicator()
     private let checkAgainButton = NSButton(title: "Check Again", target: nil, action: nil)
-    private let doneButton = NSButton(title: "Done", target: nil, action: nil)
-    private let rootStack = NSStackView()
+
+    private let diagnosticStatus = NSTextField(wrappingLabelWithString: "Not run")
+    private let diagnosticIcon = NSImageView()
+    private let diagnosticSpinner = NSProgressIndicator()
+    private let diagnosticButton = NSButton(title: "Run Diagnostic", target: nil, action: nil)
 
     private var activity = Activity.idle
     private var triggersFailure: String?
-    private var closedLidFailure: String?
+    private var diagnosticFailure: String?
+    private var latestReport: SetupReport?
+    private var selectedPane: Pane = .general
+    private var developerIsVisible = false
     private var lastAnnouncedSummary: String?
     private var lastRefreshFinishedAt: TimeInterval = -.greatestFiniteMagnitude
     private var autoRefreshTask: Task<Void, Never>?
     private var completionCoordinator = SetupCompletionCoordinator()
+
     var onSetupCompleted: (() -> Void)?
     var onWorkFinished: (() -> Void)?
 
     private var allRows: [SetupRowView] {
-        [amphetamineRow, automationRow, triggersRow, screenLockRow, closedLidRow]
+        [amphetamineRow, automationRow, triggersRow, screenLockRow, powerProtectRow]
     }
 
     var isBusy: Bool {
         switch activity {
         case .idle: false
-        case .refreshing, .disablingTriggers, .runningClosedLidCheck: true
+        case .refreshing, .disablingTriggers, .runningDiagnostic: true
         }
     }
 
-    init(controller: ModeControlling) {
-        self.runner = SetupCheckRunner(controller: controller)
-        let window = SetupWindow(
-            contentRect: NSRect(x: 0, y: 0, width: SetupLayout.windowWidth, height: 430),
+    init(
+        controller: ModeControlling,
+        store: ModeStateStoring,
+        launchManager: LaunchAtLoginManaging
+    ) {
+        self.runner = SettingsCheckRunner(controller: controller)
+        self.store = store
+        self.launchManager = launchManager
+        let window = SettingsWindow(
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: SettingsLayout.windowWidth,
+                height: SettingsLayout.initialContentHeight
+            ),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Caffeine Modes Setup"
+        window.title = "Settings"
         window.center()
+        window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
-        configureContent()
-        render(.checking)
+        appearanceObservation = NSApplication.shared.observe(
+            \.effectiveAppearance
+        ) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                self?.rebuildToolbarForAppearanceChange()
+            }
+        }
+        configureContentHost()
+        configureControls()
+        configureToolbar()
+        select(.general, refresh: false)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
     override func showWindow(_ sender: Any?) {
-        super.showWindow(sender)
+        let optionHeld = NSApp.currentEvent?.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .contains(.option) == true
+        show(pane: .general, includeDeveloper: optionHeld)
+    }
+
+    func show(pane: Pane, includeDeveloper: Bool = false) {
+        if developerIsVisible != includeDeveloper {
+            developerIsVisible = includeDeveloper
+            configureToolbar()
+        }
+        let destination = pane == .developer && !developerIsVisible ? .general : pane
+        select(destination, refresh: destination == .setup || destination == .developer)
+        super.showWindow(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
-        beginRefresh(userInitiated: false)
     }
 
     func checkAndShowIfNeeded(completion: @escaping @MainActor (Bool) -> Void) {
@@ -81,8 +162,10 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
                 completion(false)
                 return
             }
-            let shouldShow = !report.isReady || self.window?.isVisible == true
-            if shouldShow {
+            if !report.isReady || self.window?.isVisible == true {
+                self.developerIsVisible = false
+                self.configureToolbar()
+                self.select(.setup, refresh: false)
                 self.showWindowWithoutRefresh()
             }
             self.finishRefresh(report: report, announceResult: false)
@@ -97,147 +180,15 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         autoRefreshTask?.cancel()
+        if selectedPane == .general {
+            refreshGeneralControls()
+        }
+        guard selectedPane == .setup || selectedPane == .developer else { return }
         autoRefreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
             self?.autoRefreshIfIdle()
         }
-    }
-
-    // MARK: - Layout
-
-    private func configureContent() {
-        guard let contentView = window?.contentView else { return }
-
-        let title = NSTextField(labelWithString: "Setup Status")
-        title.font = .systemFont(ofSize: 22, weight: .semibold)
-
-        let intro = NSTextField(wrappingLabelWithString: SetupStatusPresentation.intro)
-        intro.textColor = .secondaryLabelColor
-        intro.preferredMaxLayoutWidth = SetupLayout.contentWidth
-
-        let titleBlock = NSStackView(views: [title, intro])
-        titleBlock.orientation = .vertical
-        titleBlock.alignment = .leading
-        titleBlock.spacing = 8
-
-        let coreGroup = groupBlock(
-            title: SetupStatusPresentation.coreGroupTitle,
-            rows: [amphetamineRow, automationRow, triggersRow]
-        )
-        let displaySleepGroup = groupBlock(
-            title: SetupStatusPresentation.displaySleepGroupTitle,
-            rows: [screenLockRow, closedLidRow]
-        )
-
-        let separator = NSBox()
-        separator.boxType = .separator
-
-        footerSpinner.style = .spinning
-        footerSpinner.controlSize = .small
-        footerSpinner.isDisplayedWhenStopped = false
-        footerSpinner.setAccessibilityElement(false)
-
-        summaryLabel.textColor = .secondaryLabelColor
-        summaryLabel.lineBreakMode = .byTruncatingTail
-
-        checkAgainButton.bezelStyle = .rounded
-        checkAgainButton.controlSize = .small
-        checkAgainButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        checkAgainButton.target = self
-        checkAgainButton.action = #selector(checkAgainTapped)
-
-        doneButton.bezelStyle = .rounded
-        doneButton.keyEquivalent = "\r"
-        doneButton.target = self
-        doneButton.action = #selector(doneTapped)
-
-        let footer = NSStackView()
-        footer.orientation = .horizontal
-        footer.alignment = .centerY
-        footer.spacing = 8
-        footer.addView(footerSpinner, in: .leading)
-        footer.addView(summaryLabel, in: .leading)
-        footer.addView(checkAgainButton, in: .trailing)
-        footer.addView(doneButton, in: .trailing)
-
-        let footerBlock = NSStackView(views: [separator, footer])
-        footerBlock.orientation = .vertical
-        footerBlock.alignment = .leading
-        footerBlock.spacing = 12
-
-        rootStack.orientation = .vertical
-        rootStack.alignment = .leading
-        rootStack.spacing = 20
-        rootStack.edgeInsets = NSEdgeInsets(
-            top: SetupLayout.outerInset,
-            left: SetupLayout.outerInset,
-            bottom: SetupLayout.outerInset,
-            right: SetupLayout.outerInset
-        )
-        rootStack.addArrangedSubview(titleBlock)
-        rootStack.addArrangedSubview(coreGroup)
-        rootStack.addArrangedSubview(displaySleepGroup)
-        rootStack.addArrangedSubview(footerBlock)
-        rootStack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(rootStack)
-
-        var constraints: [NSLayoutConstraint] = [
-            rootStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            rootStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            rootStack.topAnchor.constraint(equalTo: contentView.topAnchor),
-            rootStack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor),
-            rootStack.widthAnchor.constraint(equalToConstant: SetupLayout.windowWidth),
-            separator.widthAnchor.constraint(equalToConstant: SetupLayout.contentWidth),
-            footer.widthAnchor.constraint(equalToConstant: SetupLayout.contentWidth)
-        ]
-        constraints += allRows.map {
-            $0.widthAnchor.constraint(equalToConstant: SetupLayout.contentWidth)
-        }
-        NSLayoutConstraint.activate(constraints)
-    }
-
-    private func groupBlock(title: String, rows: [SetupRowView]) -> NSStackView {
-        let header = NSTextField(labelWithString: title)
-        header.font = .systemFont(ofSize: 11, weight: .semibold)
-        header.textColor = .secondaryLabelColor
-
-        let rowsStack = NSStackView(views: rows)
-        rowsStack.orientation = .vertical
-        rowsStack.alignment = .leading
-        rowsStack.spacing = 14
-
-        let block = NSStackView(views: [header, rowsStack])
-        block.orientation = .vertical
-        block.alignment = .leading
-        block.spacing = 8
-        return block
-    }
-
-    private func sizeWindowToFit() {
-        guard let window, let contentView = window.contentView else { return }
-        contentView.layoutSubtreeIfNeeded()
-        let contentRect = NSRect(
-            x: 0,
-            y: 0,
-            width: SetupLayout.windowWidth,
-            height: rootStack.fittingSize.height
-        )
-        let frameSize = window.frameRect(forContentRect: contentRect).size
-        var frame = window.frame
-        frame.origin.y += frame.height - frameSize.height
-        frame.size = frameSize
-        window.setFrame(frame, display: true, animate: window.isVisible)
-    }
-
-    // MARK: - Checks
-
-    @objc private func checkAgainTapped() {
-        beginRefresh(userInitiated: true)
-    }
-
-    @objc private func doneTapped() {
-        window?.performClose(nil)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -251,11 +202,203 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         return true
     }
 
+    // MARK: - Toolbar
+
+    private func configureToolbar() {
+        let toolbar = NSToolbar(identifier: "CaffeineModesSettings")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+        window?.toolbarStyle = .preference
+        window?.toolbar = toolbar
+        toolbar.selectedItemIdentifier = selectedPane.identifier
+    }
+
+    /// On current macOS, live WindowServer captures show the selected
+    /// preference-toolbar capsule re-resolving on its own when the app's
+    /// appearance changes; the earlier stale-capsule diagnosis came from
+    /// offscreen `cacheDisplay` renders, which rasterize the glass capsule as
+    /// an opaque white fallback and are not evidence of on-screen state. The
+    /// rebuild stays as a low-cost guarantee for older supported systems that
+    /// cannot be re-verified from this machine.
+    private func rebuildToolbarForAppearanceChange() {
+        guard window?.toolbar != nil else { return }
+        configureToolbar()
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        paneList.map(\.identifier)
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        paneList.map(\.identifier)
+    }
+
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        paneList.map(\.identifier)
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        guard let pane = paneList.first(where: { $0.identifier == itemIdentifier }) else { return nil }
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.label = pane.title
+        item.paletteLabel = pane.title
+        item.image = NSImage(systemSymbolName: pane.symbolName, accessibilityDescription: pane.title)
+        item.target = self
+        switch pane {
+        case .general: item.action = #selector(showGeneral)
+        case .setup: item.action = #selector(showSetup)
+        case .modes: item.action = #selector(showModes)
+        case .developer: item.action = #selector(showDeveloper)
+        }
+        return item
+    }
+
+    private var paneList: [Pane] {
+        developerIsVisible ? [.general, .setup, .modes, .developer] : [.general, .setup, .modes]
+    }
+
+    @objc private func showGeneral() { select(.general, refresh: false) }
+    @objc private func showSetup() { select(.setup, refresh: true) }
+    @objc private func showModes() { select(.modes, refresh: false) }
+    @objc private func showDeveloper() { select(.developer, refresh: true) }
+
+    private func select(_ pane: Pane, refresh: Bool) {
+        selectedPane = pane
+        window?.toolbar?.selectedItemIdentifier = pane.identifier
+        window?.title = pane.title
+        let view: NSView
+        switch pane {
+        case .general:
+            refreshGeneralControls()
+            view = generalView
+        case .setup: view = setupView
+        case .modes: view = modesView
+        case .developer: view = developerView
+        }
+        contentHost.subviews.forEach { $0.removeFromSuperview() }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        contentHost.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
+            view.topAnchor.constraint(equalTo: contentHost.topAnchor),
+            view.bottomAnchor.constraint(lessThanOrEqualTo: contentHost.bottomAnchor)
+        ])
+        resizeWindow(toFit: view)
+        if refresh { beginRefresh(userInitiated: false) }
+    }
+
+    // MARK: - General
+
+    private func makeGeneralView() -> NSView {
+        let intro = detailText("Caffeine Modes asks before it changes Amphetamine.")
+
+        let unlockLabel = NSTextField(labelWithString: "Suggested action after unlock")
+        unlockLabel.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        let choiceStack = NSStackView(views: [unlockOffButton, unlockWorkButton])
+        choiceStack.orientation = .vertical
+        choiceStack.alignment = .leading
+        choiceStack.spacing = 8
+
+        let unlockStack = NSStackView(views: [unlockLabel, choiceStack, intro])
+        unlockStack.orientation = .vertical
+        unlockStack.alignment = .leading
+        unlockStack.spacing = 8
+
+        let stack = NSStackView(views: [launchCheckbox, separator(), unlockStack])
+        return paneStack(stack, spacing: 20)
+    }
+
+    private func configureControls() {
+        launchCheckbox.target = self
+        launchCheckbox.action = #selector(toggleLaunchAtLogin)
+        unlockOffButton.target = self
+        unlockOffButton.action = #selector(selectPostUnlockOff)
+        unlockWorkButton.target = self
+        unlockWorkButton.action = #selector(selectPostUnlockWork)
+
+        setupSpinner.style = .spinning
+        setupSpinner.controlSize = .small
+        setupSpinner.isDisplayedWhenStopped = false
+        diagnosticSpinner.style = .spinning
+        diagnosticSpinner.controlSize = .small
+        diagnosticSpinner.isDisplayedWhenStopped = false
+    }
+
+    private func refreshGeneralControls() {
+        launchCheckbox.state = launchManager.isEnabled ? .on : .off
+        unlockOffButton.state = store.postUnlockMode == .off ? .on : .off
+        unlockWorkButton.state = store.postUnlockMode == .work ? .on : .off
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        do {
+            try launchManager.setEnabled(launchCheckbox.state == .on)
+        } catch {
+            refreshGeneralControls()
+            showError(error)
+        }
+        onWorkFinished?()
+    }
+
+    @objc private func selectPostUnlockOff() {
+        store.postUnlockMode = .off
+        refreshGeneralControls()
+    }
+
+    @objc private func selectPostUnlockWork() {
+        store.postUnlockMode = .work
+        refreshGeneralControls()
+    }
+
+    // MARK: - Setup
+
+    private func makeSetupView() -> NSView {
+        let intro = secondaryText(SetupStatusPresentation.intro)
+        let allModes = groupBlock(
+            title: SetupStatusPresentation.coreGroupTitle,
+            rows: [amphetamineRow, automationRow, triggersRow]
+        )
+        let awayModes = groupBlock(
+            title: SetupStatusPresentation.displaySleepGroupTitle,
+            rows: [screenLockRow, powerProtectRow]
+        )
+
+        setupSummaryLabel.textColor = .secondaryLabelColor
+        checkAgainButton.controlSize = .small
+        checkAgainButton.target = self
+        checkAgainButton.action = #selector(checkAgainTapped)
+
+        let footer = NSStackView()
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = 8
+        footer.addView(setupSpinner, in: .leading)
+        footer.addView(setupSummaryLabel, in: .leading)
+        footer.addView(checkAgainButton, in: .trailing)
+        footer.widthAnchor.constraint(equalToConstant: SettingsLayout.contentWidth).isActive = true
+
+        let stack = NSStackView(views: [intro, allModes, awayModes, separator(), footer])
+        let view = paneStack(stack, spacing: 16)
+        allRows.forEach {
+            $0.widthAnchor.constraint(equalToConstant: SettingsLayout.contentWidth).isActive = true
+        }
+        apply(.checking)
+        return view
+    }
+
+    @objc private func checkAgainTapped() {
+        beginRefresh(userInitiated: true)
+    }
+
     private func autoRefreshIfIdle() {
-        guard activity == .idle else { return }
-        // A confirmation alert runs the main run loop; refreshing under it
-        // would clobber the activity state the alert is about to commit.
-        guard NSApplication.shared.modalWindow == nil else { return }
+        guard activity == .idle, NSApplication.shared.modalWindow == nil else { return }
         guard ProcessInfo.processInfo.systemUptime - lastRefreshFinishedAt >= 1 else { return }
         beginRefresh(userInitiated: false)
     }
@@ -264,25 +407,25 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         guard activity == .idle else { return }
         activity = .refreshing
         completionCoordinator.beginRefresh()
-        footerSpinner.startAnimation(nil)
-        summaryLabel.stringValue = "Checking…"
-        disableControlsWhileBusy()
+        setupSpinner.startAnimation(nil)
+        setupSummaryLabel.stringValue = "Checking…"
+        setControlsDisabled(true)
         runner.fetchReport { [weak self] report in
             self?.finishRefresh(report: report, announceResult: userInitiated)
         }
     }
 
     private func finishRefresh(report: SetupReport, announceResult: Bool) {
+        latestReport = report
         activity = .idle
         lastRefreshFinishedAt = ProcessInfo.processInfo.systemUptime
         if report.triggers == .passed { triggersFailure = nil }
-        if report.closedDisplayReady { closedLidFailure = nil }
         let presentation = SetupStatusPresentation.make(
             report: report,
-            triggersActionFailure: triggersFailure,
-            closedLidActionFailure: closedLidFailure
+            triggersActionFailure: triggersFailure
         )
         render(presentation)
+        renderDeveloperStatus(report)
         if completionCoordinator.consumeCompletionAfterRefresh() {
             onSetupCompleted?()
         }
@@ -291,42 +434,44 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func render(_ presentation: SetupStatusPresentation) {
+        apply(presentation)
+        if selectedPane == .setup {
+            resizeWindow(toFit: setupView)
+        }
+    }
+
+    /// Applies the presentation without resizing the window. `makeSetupView`
+    /// must use this: resizing reads the lazy `setupView`, which would re-enter
+    /// its initializer and recurse.
+    private func apply(_ presentation: SetupStatusPresentation) {
         completionCoordinator.update(isComplete: presentation.isComplete)
         let action = #selector(rowActionTapped(_:))
         amphetamineRow.apply(presentation.amphetamine, target: self, action: action)
         automationRow.apply(presentation.automation, target: self, action: action)
         triggersRow.apply(presentation.triggers, target: self, action: action)
         screenLockRow.apply(presentation.screenLock, target: self, action: action)
-        closedLidRow.apply(presentation.closedLid, target: self, action: action)
-
-        footerSpinner.stopAnimation(nil)
-        summaryLabel.stringValue = presentation.summary
-        summaryLabel.textColor = presentation.isComplete ? .labelColor : .secondaryLabelColor
-        checkAgainButton.isEnabled = true
-        doneButton.isHidden = !presentation.isComplete
-        doneButton.isEnabled = true
-
+        powerProtectRow.apply(presentation.powerProtect, target: self, action: action)
+        setupSpinner.stopAnimation(nil)
+        setupSummaryLabel.stringValue = presentation.summary
+        setupSummaryLabel.textColor = presentation.isComplete ? .labelColor : .secondaryLabelColor
+        setControlsDisabled(false)
         rebuildKeyViewLoop()
-        sizeWindowToFit()
     }
 
-    private func disableControlsWhileBusy() {
-        checkAgainButton.isEnabled = false
-        doneButton.isEnabled = false
-        for row in allRows {
-            row.setActionTemporarilyDisabled(true)
-        }
+    private func setControlsDisabled(_ disabled: Bool) {
+        checkAgainButton.isEnabled = !disabled
+        diagnosticButton.isEnabled = !disabled
+            && DeveloperDiagnosticAvailability.make(report: latestReport).isEnabled
+        allRows.forEach { $0.setActionTemporarilyDisabled(disabled) }
     }
-
-    // MARK: - Row actions
 
     @objc private func rowActionTapped(_ sender: NSButton) {
-        guard activity == .idle else { return }
-        autoRefreshTask?.cancel()
-        guard let row = allRows.first(where: { $0.actionButton === sender }),
-              let rowAction = row.currentAction
+        guard activity == .idle,
+              let row = allRows.first(where: { $0.actionButton === sender }),
+              let action = row.currentAction
         else { return }
-        switch rowAction {
+        autoRefreshTask?.cancel()
+        switch action {
         case .getAmphetamine, .updateAmphetamine:
             open("https://apps.apple.com/app/amphetamine/id937984704")
         case .openAutomationSettings:
@@ -335,22 +480,22 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
             open("x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension")
         case .disableTriggers:
             confirmAndDisableTriggers()
-        case .runClosedLidCheck:
-            confirmAndRunClosedLidCheck()
+        case .getPowerProtect:
+            open("https://github.com/x74353/Amphetamine-Power-Protect")
         }
     }
 
     private func confirmAndDisableTriggers() {
         let alert = NSAlert()
-        alert.messageText = "Disable Amphetamine Triggers?"
-        alert.informativeText = "Triggers let Amphetamine start sessions on its own. Caffeine Modes needs to be the only session owner. This changes only Amphetamine’s Triggers setting."
-        alert.addButton(withTitle: "Disable Triggers")
+        alert.messageText = "Turn Off Amphetamine Triggers?"
+        alert.informativeText = "This prevents Triggers from changing the mode you select here."
+        alert.addButton(withTitle: "Turn Off Triggers")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         activity = .disablingTriggers
-        triggersRow.showProgress("Turning Amphetamine Triggers off…")
-        disableControlsWhileBusy()
+        triggersRow.showProgress("Turning off Triggers…")
+        setControlsDisabled(true)
         runner.disableTriggers { [weak self] failure in
             guard let self else { return }
             self.triggersFailure = failure
@@ -359,23 +504,261 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    private func confirmAndRunClosedLidCheck() {
+    // MARK: - Modes
+
+    private func makeModesView() -> NSView {
+        let headers = ["Mode", "Laptop", "Open + external", "Closed + external"]
+        let rows = [
+            headers.map { gridText($0, header: true) },
+            [
+                gridText("Work", header: true),
+                gridText("Mac and built-in display stay awake."),
+                gridText("Mac and all displays stay awake."),
+                gridText("External display stays awake. Normal clamshell rules apply.")
+            ],
+            [
+                gridText("Night", header: true),
+                gridText("Display turns off. Mac locks and keeps working."),
+                gridText("All displays turn off. Mac locks and keeps working."),
+                gridText("External display turns off. Mac keeps working.")
+            ],
+            [
+                gridText("Travel", header: true),
+                gridText("Display turns off. Mac locks and keeps working until the timer ends."),
+                gridText("All displays turn off. Mac locks and keeps working until the timer ends."),
+                gridText("External display turns off. Mac keeps working until the timer ends.")
+            ]
+        ]
+        let grid = NSGridView(views: rows)
+        grid.columnSpacing = 16
+        grid.rowSpacing = 12
+        grid.column(at: 0).width = 72
+        for index in 1...3 {
+            grid.column(at: index).width = SettingsLayout.modeColumnWidth
+        }
+        for index in 1..<grid.numberOfRows {
+            grid.row(at: index).topPadding = 4
+            grid.row(at: index).bottomPadding = 4
+        }
+
+        let notes = NSStackView(views: [
+            detailText("Night and Travel turn off all connected displays."),
+            detailText("Works with displays and docks that already work normally with macOS and Amphetamine."),
+            detailText("Do not run a closed Mac inside an enclosed bag.")
+        ])
+        notes.orientation = .vertical
+        notes.alignment = .leading
+        notes.spacing = 8
+
+        let stack = NSStackView(views: [grid, separator(), notes])
+        return paneStack(stack, spacing: 20)
+    }
+
+    private func gridText(_ text: String, header: Bool = false) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(
+            ofSize: header ? NSFont.systemFontSize : NSFont.smallSystemFontSize,
+            weight: header ? .semibold : .regular
+        )
+        label.textColor = header ? .labelColor : .secondaryLabelColor
+        label.alignment = .left
+        label.preferredMaxLayoutWidth = SettingsLayout.modeColumnWidth
+        return label
+    }
+
+    // MARK: - Developer
+
+    private func makeDeveloperView() -> NSView {
+        let title = NSTextField(labelWithString: "Closed-lid diagnostic")
+        title.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        let detail = detailText(
+            "Verifies Amphetamine in a few seconds. A temporary one-minute session then ends automatically. Keep the lid open."
+        )
+        diagnosticStatus.textColor = .secondaryLabelColor
+        diagnosticStatus.preferredMaxLayoutWidth = SettingsLayout.contentWidth - 160
+        diagnosticButton.target = self
+        diagnosticButton.action = #selector(runDiagnostic)
+
+        let statusSymbol = NSView()
+        statusSymbol.translatesAutoresizingMaskIntoConstraints = false
+        diagnosticIcon.translatesAutoresizingMaskIntoConstraints = false
+        diagnosticSpinner.translatesAutoresizingMaskIntoConstraints = false
+        statusSymbol.addSubview(diagnosticIcon)
+        statusSymbol.addSubview(diagnosticSpinner)
+        NSLayoutConstraint.activate([
+            statusSymbol.widthAnchor.constraint(equalToConstant: 20),
+            statusSymbol.heightAnchor.constraint(equalToConstant: 20),
+            diagnosticIcon.centerXAnchor.constraint(equalTo: statusSymbol.centerXAnchor),
+            diagnosticIcon.centerYAnchor.constraint(equalTo: statusSymbol.centerYAnchor),
+            diagnosticIcon.widthAnchor.constraint(equalToConstant: 20),
+            diagnosticIcon.heightAnchor.constraint(equalToConstant: 20),
+            diagnosticSpinner.centerXAnchor.constraint(equalTo: statusSymbol.centerXAnchor),
+            diagnosticSpinner.centerYAnchor.constraint(equalTo: statusSymbol.centerYAnchor)
+        ])
+
+        let statusRow = NSStackView()
+        statusRow.orientation = .horizontal
+        statusRow.alignment = .centerY
+        statusRow.spacing = 8
+        statusRow.addView(statusSymbol, in: .leading)
+        statusRow.addView(diagnosticStatus, in: .leading)
+        statusRow.addView(diagnosticButton, in: .trailing)
+        statusRow.widthAnchor.constraint(equalToConstant: SettingsLayout.contentWidth).isActive = true
+
+        let stack = NSStackView(views: [title, detail, statusRow])
+        return paneStack(stack, spacing: 12)
+    }
+
+    @objc private func runDiagnostic() {
+        guard activity == .idle,
+              DeveloperDiagnosticAvailability.make(report: latestReport).isEnabled
+        else { return }
         let alert = NSAlert()
-        alert.messageText = "Run the Closed-Lid Setup Check?"
-        alert.informativeText = "This starts a one-minute Amphetamine session and verifies closed-display mode. You do not need to close the lid, and the session ends on its own after one minute.\n\nIf another Amphetamine session appears before the check starts, the check replaces it. Amphetamine may show its own Power Protect setup."
-        alert.addButton(withTitle: "Run Check")
+        alert.messageText = "Run Closed-Lid Diagnostic?"
+        alert.informativeText = "Amphetamine starts a temporary one-minute session. It ends automatically. Keep the lid open. If another Amphetamine session starts first, Caffeine Modes replaces it."
+        alert.addButton(withTitle: "Run Diagnostic")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        activity = .runningClosedLidCheck
-        closedLidRow.showProgress("Running the closed-lid setup check… Amphetamine may show its own Power Protect steps.")
-        disableControlsWhileBusy()
-        runner.runClosedLidCheck { [weak self] failure in
+        activity = .runningDiagnostic
+        diagnosticFailure = nil
+        diagnosticIcon.image = nil
+        diagnosticSpinner.startAnimation(nil)
+        diagnosticStatus.stringValue = "Checking Amphetamine…"
+        setControlsDisabled(true)
+        runner.runClosedLidDiagnostic { [weak self] failure in
             guard let self else { return }
-            self.closedLidFailure = failure
+            self.diagnosticFailure = failure
             self.activity = .idle
             self.beginRefresh(userInitiated: true)
         }
+    }
+
+    private func renderDeveloperStatus(_ report: SetupReport) {
+        diagnosticSpinner.stopAnimation(nil)
+        let availability = DeveloperDiagnosticAvailability.make(report: report)
+        diagnosticButton.isEnabled = activity == .idle && availability.isEnabled
+        if report.developerDiagnosticPassed,
+           report.developerDiagnosticIsActive {
+            diagnosticStatus.stringValue = "Passed · Temporary session ends within a minute"
+            diagnosticStatus.textColor = .secondaryLabelColor
+            diagnosticIcon.image = NSImage(
+                systemSymbolName: "hourglass",
+                accessibilityDescription: "Temporary diagnostic session"
+            )
+        } else if let diagnosticFailure {
+            diagnosticStatus.stringValue = diagnosticFailure
+            diagnosticStatus.textColor = .systemOrange
+            diagnosticIcon.image = NSImage(
+                systemSymbolName: "exclamationmark.circle.fill",
+                accessibilityDescription: "Diagnostic failed"
+            )
+        } else if let blockedStatus = availability.blockedStatus {
+            diagnosticStatus.stringValue = blockedStatus
+            diagnosticStatus.textColor = .secondaryLabelColor
+            diagnosticIcon.image = nil
+        } else if report.developerDiagnosticPassed {
+            diagnosticStatus.stringValue = "Passed"
+            diagnosticStatus.textColor = .labelColor
+            diagnosticIcon.image = NSImage(
+                systemSymbolName: "checkmark.circle.fill",
+                accessibilityDescription: "Diagnostic passed"
+            )
+        } else {
+            diagnosticStatus.stringValue = "Not run"
+            diagnosticStatus.textColor = .secondaryLabelColor
+            diagnosticIcon.image = nil
+        }
+        if selectedPane == .developer {
+            resizeWindow(toFit: developerView)
+        }
+    }
+
+    // MARK: - Shared layout and accessibility
+
+    private func configureContentHost() {
+        guard let contentView = window?.contentView else { return }
+        contentHost.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(contentHost)
+        NSLayoutConstraint.activate([
+            contentHost.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: SettingsLayout.outerInset),
+            contentHost.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -SettingsLayout.outerInset),
+            contentHost.topAnchor.constraint(equalTo: contentView.topAnchor, constant: SettingsLayout.outerInset),
+            contentHost.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -SettingsLayout.outerInset)
+        ])
+    }
+
+    private func paneStack(_ stack: NSStackView, spacing: CGFloat) -> NSView {
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = spacing
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let view = NSView()
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: view.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        return view
+    }
+
+    private func resizeWindow(toFit paneView: NSView) {
+        guard let window else { return }
+        paneView.layoutSubtreeIfNeeded()
+        let paneHeight = ceil(paneView.fittingSize.height)
+        let contentSize = NSSize(
+            width: SettingsLayout.windowWidth,
+            height: paneHeight + SettingsLayout.outerInset * 2
+        )
+        var targetFrame = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: contentSize)
+        )
+        let currentFrame = window.frame
+        targetFrame.origin = NSPoint(
+            x: currentFrame.minX,
+            y: currentFrame.maxY - targetFrame.height
+        )
+        if let screen = window.screen {
+            targetFrame = window.constrainFrameRect(targetFrame, to: screen)
+        }
+        window.setFrame(targetFrame, display: true, animate: window.isVisible)
+    }
+
+    private func groupBlock(title: String, rows: [SetupRowView]) -> NSStackView {
+        let header = NSTextField(labelWithString: title)
+        header.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        header.textColor = .secondaryLabelColor
+        let rowsStack = NSStackView(views: rows)
+        rowsStack.orientation = .vertical
+        rowsStack.alignment = .leading
+        rowsStack.spacing = 12
+        let block = NSStackView(views: [header, rowsStack])
+        block.orientation = .vertical
+        block.alignment = .leading
+        block.spacing = 8
+        return block
+    }
+
+    private func secondaryText(_ text: String) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.textColor = .secondaryLabelColor
+        label.preferredMaxLayoutWidth = SettingsLayout.contentWidth
+        return label
+    }
+
+    private func detailText(_ text: String) -> NSTextField {
+        let label = secondaryText(text)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        return label
+    }
+
+    private func separator() -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        box.widthAnchor.constraint(equalToConstant: SettingsLayout.contentWidth).isActive = true
+        return box
     }
 
     private func open(_ value: String) {
@@ -383,48 +766,49 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         NSWorkspace.shared.open(url)
     }
 
-    // MARK: - Keyboard and VoiceOver
+    private func showError(_ error: Error) {
+        let alert = NSAlert(error: error)
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
 
     private func rebuildKeyViewLoop() {
         guard let window else { return }
-        window.autorecalculatesKeyViewLoop = false
-        var chain: [NSView] = allRows.compactMap {
-            $0.actionButton.isHidden ? nil : $0.actionButton
+        window.autorecalculatesKeyViewLoop = true
+        switch selectedPane {
+        case .general: window.initialFirstResponder = launchCheckbox
+        case .setup:
+            window.initialFirstResponder = allRows.compactMap {
+                $0.actionButton.isHidden ? nil : $0.actionButton
+            }.first ?? checkAgainButton
+        case .modes: window.initialFirstResponder = nil
+        case .developer: window.initialFirstResponder = diagnosticButton
         }
-        chain.append(checkAgainButton)
-        if !doneButton.isHidden {
-            chain.append(doneButton)
-        }
-        for (index, view) in chain.enumerated() {
-            view.nextKeyView = chain[(index + 1) % chain.count]
-        }
-        window.initialFirstResponder = chain.first
     }
 
     private func announceIfNeeded(_ summary: String, force: Bool) {
-        guard force || summary != lastAnnouncedSummary else { return }
+        guard force || summary != lastAnnouncedSummary, let window else { return }
         lastAnnouncedSummary = summary
-        guard let window else { return }
         NSAccessibility.post(
             element: window,
             notification: .announcementRequested,
             userInfo: [
-                .announcement: "Setup status: \(summary)",
+                .announcement: "Setup: \(summary)",
                 .priority: NSAccessibilityPriorityLevel.medium.rawValue
             ]
         )
     }
 }
 
-private enum SetupLayout {
-    static let windowWidth: CGFloat = 520
+private enum SettingsLayout {
+    static let windowWidth: CGFloat = 720
+    static let initialContentHeight: CGFloat = 220
     static let outerInset: CGFloat = 24
     static let iconColumnWidth: CGFloat = 28
+    static let modeColumnWidth: CGFloat = 184
     static var contentWidth: CGFloat { windowWidth - outerInset * 2 }
 }
 
-/// One self-contained setup check: state symbol, title, per-row detail,
-/// and at most one trailing action.
 @MainActor
 private final class SetupRowView: NSView {
     let actionButton = NSButton(title: "", target: nil, action: nil)
@@ -439,31 +823,22 @@ private final class SetupRowView: NSView {
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.setAccessibilityElement(false)
-
         progressIndicator.style = .spinning
         progressIndicator.controlSize = .small
         progressIndicator.isDisplayedWhenStopped = false
         progressIndicator.translatesAutoresizingMaskIntoConstraints = false
         progressIndicator.setAccessibilityElement(false)
-
         titleLabel.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
         detailLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        actionButton.bezelStyle = .rounded
         actionButton.controlSize = .small
-        actionButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         actionButton.translatesAutoresizingMaskIntoConstraints = false
         actionButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        // Subview order defines the VoiceOver order: title, detail, action.
         addSubview(iconView)
         addSubview(progressIndicator)
         addSubview(titleLabel)
@@ -471,12 +846,6 @@ private final class SetupRowView: NSView {
         addSubview(actionButton)
         setAccessibilityElement(false)
 
-        let buttonOnTitleLine = actionButton.centerYAnchor.constraint(
-            equalTo: titleLabel.centerYAnchor
-        )
-        buttonOnTitleLine.priority = .defaultHigh
-        let bottomHugsDetail = bottomAnchor.constraint(equalTo: detailLabel.bottomAnchor)
-        bottomHugsDetail.priority = .defaultLow
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor),
             iconView.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
@@ -484,24 +853,15 @@ private final class SetupRowView: NSView {
             iconView.heightAnchor.constraint(equalToConstant: 20),
             progressIndicator.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
             progressIndicator.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
-            titleLabel.leadingAnchor.constraint(
-                equalTo: leadingAnchor,
-                constant: SetupLayout.iconColumnWidth
-            ),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SettingsLayout.iconColumnWidth),
             titleLabel.topAnchor.constraint(equalTo: topAnchor),
-            titleLabel.trailingAnchor.constraint(
-                lessThanOrEqualTo: actionButton.leadingAnchor,
-                constant: -12
-            ),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: actionButton.leadingAnchor, constant: -12),
             actionButton.trailingAnchor.constraint(equalTo: trailingAnchor),
-            actionButton.topAnchor.constraint(greaterThanOrEqualTo: topAnchor),
-            buttonOnTitleLine,
+            actionButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             detailLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            detailLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
-            detailLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            bottomAnchor.constraint(greaterThanOrEqualTo: detailLabel.bottomAnchor),
-            bottomAnchor.constraint(greaterThanOrEqualTo: actionButton.bottomAnchor),
-            bottomHugsDetail
+            detailLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
+            detailLabel.trailingAnchor.constraint(lessThanOrEqualTo: actionButton.leadingAnchor, constant: -12),
+            bottomAnchor.constraint(equalTo: detailLabel.bottomAnchor)
         ])
     }
 
@@ -551,8 +911,8 @@ private final class SetupRowView: NSView {
     private func updateDetailWrapWidth() {
         let reserved = actionButton.isHidden ? 0 : actionButton.fittingSize.width + 12
         detailLabel.preferredMaxLayoutWidth = max(
-            100,
-            SetupLayout.contentWidth - SetupLayout.iconColumnWidth - reserved
+            160,
+            SettingsLayout.contentWidth - SettingsLayout.iconColumnWidth - reserved
         )
     }
 
@@ -568,7 +928,7 @@ private final class SetupRowView: NSView {
             description = "Needs action"
         case .notChecked:
             name = "circle.dashed"
-            description = "Not checked yet"
+            description = "Not checked"
         }
         return NSImage(systemSymbolName: name, accessibilityDescription: description)?
             .withSymbolConfiguration(.init(pointSize: 16, weight: .regular))
@@ -583,9 +943,7 @@ private final class SetupRowView: NSView {
     }
 }
 
-/// The menu-bar app has no Window menu, so the setup window handles
-/// Escape and Command-W itself.
-private final class SetupWindow: NSWindow {
+private final class SettingsWindow: NSWindow {
     override func cancelOperation(_ sender: Any?) {
         performClose(sender)
     }
@@ -598,21 +956,13 @@ private final class SetupWindow: NSWindow {
             performClose(nil)
             return
         }
-        if event.keyCode == 53 {
-            performClose(nil)
-            return
-        }
         super.keyDown(with: event)
     }
 }
 
-/// Runs controller orchestration on one serial worker queue. The narrow
-/// NSAppleScript boundary marshals to the main thread because Apple requires
-/// it; other bounded setup work stays off the main thread. ModeController
-/// serializes public entry points so setup and menu work cannot race.
-private final class SetupCheckRunner: @unchecked Sendable {
+private final class SettingsCheckRunner: @unchecked Sendable {
     private let queue = DispatchQueue(
-        label: "com.andreaslar.caffeinemodes.setup-checks",
+        label: "com.andreaslar.caffeinemodes.settings-checks",
         qos: .userInitiated
     )
     private let controller: ModeControlling
@@ -635,7 +985,7 @@ private final class SetupCheckRunner: @unchecked Sendable {
         }
     }
 
-    func runClosedLidCheck(_ completion: @escaping @MainActor (String?) -> Void) {
+    func runClosedLidDiagnostic(_ completion: @escaping @MainActor (String?) -> Void) {
         queue.async {
             let failure = Self.failureDescription {
                 try self.controller.runClosedDisplayReadinessTest(

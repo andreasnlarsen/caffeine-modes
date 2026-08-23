@@ -6,6 +6,7 @@ public final class UserDefaultsModeStore: ModeStateStoring {
         static let ownedSessionSignature = "ownedSessionSignature"
         static let closedDisplayReadinessPassed = "closedDisplayReadinessPassed"
         static let launchAtLoginPromptWasShown = "launchAtLoginPromptWasShown"
+        static let postUnlockMode = "postUnlockMode"
     }
 
     private let defaults: UserDefaults
@@ -51,5 +52,15 @@ public final class UserDefaultsModeStore: ModeStateStoring {
     public var launchAtLoginPromptWasShown: Bool {
         get { defaults.bool(forKey: Key.launchAtLoginPromptWasShown) }
         set { defaults.set(newValue, forKey: Key.launchAtLoginPromptWasShown) }
+    }
+
+    public var postUnlockMode: PostUnlockMode {
+        get {
+            guard let rawValue = defaults.string(forKey: Key.postUnlockMode),
+                  let mode = PostUnlockMode(rawValue: rawValue)
+            else { return .off }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.postUnlockMode) }
     }
 }
