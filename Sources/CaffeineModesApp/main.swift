@@ -23,7 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             powerProtect: AmphetaminePowerProtectInspector(),
             clamshellContext: SystemClamshellContextInspector(),
             display: PMSetDisplaySleeper(),
-            store: store
+            store: store,
+            batteryProtection: AmphetamineBatteryProtectionInspector(),
+            batteryProtectionRequirement: store
         )
         let terminationRouter = ApplicationTerminationRouter(
             coordinator: ApplicationTerminationCoordinator(
@@ -41,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller: controller,
             assertions: assertions,
             store: store,
+            batteryProtectionRequirement: store,
             launchManager: LaunchAtLoginManager(),
             requestQuit: { NSApplication.shared.terminate(nil) }
         )

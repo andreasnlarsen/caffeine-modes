@@ -8,6 +8,8 @@ It gives you three policies:
 - Night turns off all connected displays and keeps the locked Mac working. After you unlock, choose Off or Work.
 - Travel does the same for 30, 60, 90, or 120 minutes. After you unlock, choose Off or Work. Amphetamine's timer still ends Travel.
 
+Battery protection is required by default at 15%. Night and Travel start only when Amphetamine is set to end sessions at 15% on battery power, without a prompt. Amphetamine owns the cutoff, so it still works if Caffeine Modes stops.
+
 Starting Work turns off Amphetamine's closed-display mode, so the lid follows normal macOS behavior. That default stays off for sessions you start in Amphetamine yourself, until you enable it again in Amphetamine.
 
 While the lid is closed, you can replace an active Night, Travel, or other closed-display session only when Caffeine Modes detects external power and an active external display. Normal macOS clamshell requirements still apply. Otherwise, open the lid before you start Work, Night, or Travel. Off always remains available.
@@ -26,7 +28,8 @@ Night and Travel can create heat when the Mac is closed. Do not run a Mac in an 
 8. Disable Amphetamine Triggers.
 9. Set the macOS password requirement to Immediately.
 10. On Apple Silicon, install Amphetamine Power Protect if Setup asks for it.
-11. Enable Launch at Login if you want Caffeine Modes to start with your Mac.
+11. In Amphetamine > Settings > Session Defaults, enable `End session if charge (%) is below`, select 15%, turn off its prompt, and enable `Ignore charge (%) if power adapter is connected`.
+12. Enable Launch at Login if you want Caffeine Modes to start with your Mac.
 
 Setup does not make you wait for a one-minute test. Night and Travel verify their required Amphetamine state when you start them. The optional one-minute diagnostic is in the hidden Developer tab. Hold Option while you open Settings to show it.
 
@@ -40,6 +43,8 @@ Caffeine Modes does not request Accessibility access. It has no analytics, telem
 - Select Travel and a duration before a short move.
 - Select Settings… when the menu reports an error.
 - Select How Modes Work… to see the result for your screen setup.
+
+In Settings > General, choose the battery protection that Night and Travel require. Setup tells you when Amphetamine matches. Changing this requirement does not change Amphetamine.
 
 Confirm every Work, Night, or Travel start. Amphetamine does not provide a stable session identity. Your confirmation also allows the new mode to replace a session that appears between the safety check and the start command.
 
@@ -80,6 +85,45 @@ Codex can create an automatic-system-sleep assertion when **Prevent Sleep While 
 Caffeine Modes works with displays and docks that already work correctly with macOS and Amphetamine. It does not add display drivers or fix an unstable cable, dock, or display connection.
 
 You can start Travel in any screen setup. You can then disconnect power and displays and move the closed Mac. Power Protect is required on Apple Silicon. When you reconnect an external display or open the lid, macOS can wake the display. Stay locked and Caffeine Modes turns it off again after 30 seconds. If you unlock, confirm Off or Work. Travel stays active until you confirm or its timer ends.
+
+## FAQ
+
+### What does the low-battery limit do?
+
+The default requirement is On at 15%. Before Night or Travel starts, Caffeine Modes checks four Amphetamine Session Defaults:
+
+- End the session on low battery is on.
+- The limit matches the selected percentage.
+- Prompt before ending is off.
+- Ignore the limit while external power is connected is on.
+
+Night and Travel stop before they change Amphetamine when any value does not match or cannot be read. Work and Off remain available.
+
+Amphetamine owns the actual battery cutoff. Caffeine Modes does not watch the battery or send a second automatic end command. This prevents two controllers from racing and keeps the cutoff active if Caffeine Modes quits or crashes.
+
+### Does Caffeine Modes change Amphetamine's battery settings?
+
+No. Amphetamine does not expose a supported AppleScript command for these settings. Caffeine Modes reads the local Session Defaults and opens Amphetamine when they need attention. You make the change in Amphetamine.
+
+The Amphetamine setting is global for non-Trigger sessions. It can also end Work and sessions that you start in Amphetamine. Turning off the Caffeine Modes requirement only stops the preflight check. It does not turn off Amphetamine's own battery limit.
+
+### What if I unplug a separate charger but keep the display connected?
+
+If the remaining display cable does not provide power, the Mac switches to battery. Night or Travel stays active. Amphetamine ends the session at its configured limit. Normal macOS sleep behavior then returns.
+
+If the remaining display cable also provides power, macOS still reports external power. Amphetamine ignores the limit because Setup requires `Ignore charge (%) if power adapter is connected`.
+
+### What if one USB-C cable carries power and the display signal?
+
+Unplugging that cable removes both power and the external display. It can also remove Ethernet, external disks, audio, and other dock devices. Night or Travel can keep the closed Mac working through Amphetamine Power Protect. Amphetamine ends the session at its configured battery limit.
+
+A task can still fail if it needs a removed disk, device, network adapter, or network connection. Caffeine Modes protects the power session. It does not preserve removed hardware or network continuity.
+
+### How is Night different from Work plus Lock and Escape?
+
+Work tells Amphetamine to keep the displays awake. It also restores normal macOS lid behavior. Lock and Escape can hide the screen, but Work is not the supported display-sleep policy.
+
+Night allows display sleep, enables closed-display work, locks the Mac, and requests display sleep only after it verifies the full policy. If the lock screen appears again while Night stays locked, Caffeine Modes requests display sleep again after 30 seconds.
 
 ## Development
 
@@ -129,8 +173,8 @@ Scripts/check-release-prerequisites.sh
 Build, sign, package, notarize, staple, and verify:
 
 ```sh
-APP_VERSION=1.1.1 BUILD_NUMBER=5 Scripts/release.sh
-APP_VERSION=1.1.1 Scripts/verify-release.sh
+APP_VERSION=1.1.2 BUILD_NUMBER=6 Scripts/release.sh
+APP_VERSION=1.1.2 Scripts/verify-release.sh
 ```
 
 Release artifacts stay under `dist/` and are ignored by Git.

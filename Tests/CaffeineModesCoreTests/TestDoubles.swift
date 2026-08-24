@@ -204,6 +204,35 @@ final class FakeDisplay: DisplaySleeping {
     }
 }
 
+final class FakeBatteryProtectionInspector: AmphetamineBatteryProtectionInspecting {
+    var configuration: AmphetamineBatteryProtectionConfiguration? = .init(
+        endsSessionOnLowBattery: true,
+        thresholdPercent: 15,
+        promptsBeforeEnding: false,
+        ignoresLimitOnExternalPower: true
+    )
+    var queuedConfigurations: [AmphetamineBatteryProtectionConfiguration?] = []
+    var error: Error?
+    var onOperation: ((TimeInterval) -> Void)?
+    private(set) var callCount = 0
+    private(set) var receivedTimeouts: [TimeInterval] = []
+
+    func inspect(timeout: TimeInterval) throws -> AmphetamineBatteryProtectionConfiguration? {
+        callCount += 1
+        receivedTimeouts.append(timeout)
+        onOperation?(timeout)
+        if let error { throw error }
+        if !queuedConfigurations.isEmpty {
+            return queuedConfigurations.removeFirst()
+        }
+        return configuration
+    }
+}
+
+final class MemoryBatteryProtectionRequirementStore: BatteryProtectionRequirementStoring {
+    var batteryProtectionRequirement = BatteryProtectionRequirement.defaultValue
+}
+
 final class MemoryStore: ModeStateStoring {
     var lastRequestedMode: OperatingMode = .off
     var ownedSessionSignature: OwnedSessionSignature?
@@ -229,7 +258,9 @@ struct Fixture {
     let powerProtect = FakePowerProtect()
     let clamshellContext = FakeClamshellContext()
     let display = FakeDisplay()
+    let batteryProtection = FakeBatteryProtectionInspector()
     let store = MemoryStore()
+    let batteryProtectionRequirement = MemoryBatteryProtectionRequirementStore()
     let clock = FixedClock()
     let monotonicClock = FixedMonotonicClock()
 
@@ -243,6 +274,8 @@ struct Fixture {
             clamshellContext: clamshellContext,
             display: display,
             store: store,
+            batteryProtection: batteryProtection,
+            batteryProtectionRequirement: batteryProtectionRequirement,
             clock: clock,
             monotonicClock: monotonicClock
         )

@@ -1,12 +1,13 @@
 import Foundation
 
-public final class UserDefaultsModeStore: ModeStateStoring {
+public final class UserDefaultsModeStore: ModeStateStoring, BatteryProtectionRequirementStoring {
     private enum Key {
         static let lastRequestedMode = "lastRequestedMode"
         static let ownedSessionSignature = "ownedSessionSignature"
         static let closedDisplayReadinessPassed = "closedDisplayReadinessPassed"
         static let launchAtLoginPromptWasShown = "launchAtLoginPromptWasShown"
         static let postUnlockMode = "postUnlockMode"
+        static let batteryProtectionRequirement = "batteryProtectionRequirement"
     }
 
     private let defaults: UserDefaults
@@ -62,5 +63,18 @@ public final class UserDefaultsModeStore: ModeStateStoring {
             return mode
         }
         set { defaults.set(newValue.rawValue, forKey: Key.postUnlockMode) }
+    }
+
+    public var batteryProtectionRequirement: BatteryProtectionRequirement {
+        get {
+            guard
+                let data = defaults.data(forKey: Key.batteryProtectionRequirement),
+                let value = try? decoder.decode(BatteryProtectionRequirement.self, from: data)
+            else { return .defaultValue }
+            return value
+        }
+        set {
+            defaults.set(try? encoder.encode(newValue), forKey: Key.batteryProtectionRequirement)
+        }
     }
 }

@@ -39,8 +39,93 @@ final class SettingsPaneRenderTests: XCTestCase {
         triggers: .needsAction,
         screenLock: .needsAction,
         powerProtect: PowerProtectStatus(isRequired: true, isInstalled: false),
+        batteryProtection: BatteryProtectionStatus(
+            requirement: .defaultValue,
+            configuration: nil
+        ),
         developerDiagnosticPassed: false
     )
+
+    @MainActor
+    func testStartupCompletionWaitsForCoalescedBatteryReport() throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+
+        var mismatchReport = readyReport
+        mismatchReport.batteryProtection = BatteryProtectionStatus(
+            requirement: .init(isRequired: true, thresholdPercent: 30),
+            configuration: AmphetamineBatteryProtectionConfiguration(
+                endsSessionOnLowBattery: true,
+                thresholdPercent: 15,
+                promptsBeforeEnding: false,
+                ignoresLimitOnExternalPower: true
+            )
+        )
+        let controller = SequencedReportModeController(
+            reports: [readyReport, mismatchReport]
+        )
+        addTeardownBlock {
+            controller.releaseFirstReport()
+        }
+        let requirementStore = MemoryBatteryProtectionRequirementStore()
+        let windowController = SettingsWindowController(
+            controller: controller,
+            store: MemoryStore(),
+            batteryProtectionRequirement: requirementStore,
+            launchManager: RenderStubLaunchManager()
+        )
+        let completion = expectation(description: "startup uses the final setup report")
+        var completionResults: [Bool] = []
+
+        windowController.checkAndShowIfNeeded { isReady in
+            completionResults.append(isReady)
+            completion.fulfill()
+        }
+        wait(for: [controller.firstReportStarted], timeout: 1)
+
+        let popUp = try XCTUnwrap(findPopUp(in: windowController))
+        popUp.selectItem(withTag: 30)
+        _ = popUp.sendAction(popUp.action, to: popUp.target)
+        controller.releaseFirstReport()
+
+        wait(for: [completion], timeout: 2)
+        XCTAssertEqual(completionResults, [false])
+        XCTAssertEqual(controller.reportCallCount, 2)
+        XCTAssertEqual(
+            requirementStore.batteryProtectionRequirement.thresholdPercent,
+            30
+        )
+    }
+
+    @MainActor
+    func testStartupNeedsAttentionReportDoesNotRevertToChecking() {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+        let windowController = SettingsWindowController(
+            controller: RenderStubModeController(report: needsActionReport, reportDelay: 0),
+            store: MemoryStore(),
+            batteryProtectionRequirement: MemoryBatteryProtectionRequirementStore(),
+            launchManager: RenderStubLaunchManager()
+        )
+        addTeardownBlock { @MainActor in
+            windowController.window?.orderOut(nil)
+        }
+        let completion = expectation(description: "startup report is accepted")
+        var isReady: Bool?
+
+        windowController.checkAndShowIfNeeded { ready in
+            isReady = ready
+            completion.fulfill()
+        }
+
+        wait(for: [completion], timeout: 2)
+        XCTAssertEqual(isReady, false)
+        XCTAssertEqual(
+            staticTextCount(in: windowController, containing: "Setup needs attention"),
+            1
+        )
+        XCTAssertEqual(staticTextCount(in: windowController, containing: "Checking…"), 0)
+    }
 
     @MainActor
     func testGeneralSetupAndModesPanesFitTheirContent() throws {
@@ -53,6 +138,16 @@ final class SettingsPaneRenderTests: XCTestCase {
             staticTextCount(in: windowController, containing: "closed-display mode"),
             1,
             "General must state the Work closed-display note exactly once"
+        )
+        XCTAssertEqual(
+            staticTextCount(in: windowController, containing: "will not start until Amphetamine matches"),
+            1,
+            "General must state the battery-protection requirement exactly once"
+        )
+        XCTAssertEqual(
+            staticTextCount(in: windowController, containing: "After you unlock"),
+            1,
+            "General must scope the confirmation text to unlock handling"
         )
 
         try selectPane(windowController, .setup)
@@ -70,7 +165,11 @@ final class SettingsPaneRenderTests: XCTestCase {
             XCTAssertEqual(size.width, 720, accuracy: 0.5)
             XCTAssertLessThan(size.height, 620, "Panes must stay compact")
         }
-        XCTAssertLessThan(generalSize.height, 300, "General must not reserve an empty canvas")
+        XCTAssertLessThan(
+            generalSize.height,
+            380,
+            "General must stay below the 380-point product ceiling"
+        )
         XCTAssertGreaterThan(setupSize.height, generalSize.height + 40, "Heights must follow content")
         try XCTAssertEqual(windowTopEdge(of: windowController), topEdge, accuracy: 0.5)
     }
@@ -83,7 +182,7 @@ final class SettingsPaneRenderTests: XCTestCase {
         waitUntilIdle(windowController)
         let setupSize = try contentSize(of: windowController)
         try snapshot(windowController, name: "setup-needs-action")
-        XCTAssertLessThan(setupSize.height, 620, "Setup with five pending actions must stay compact")
+        XCTAssertLessThan(setupSize.height, 620, "Setup with six checks must stay compact")
         try XCTAssertEqual(windowTopEdge(of: windowController), topEdge, accuracy: 0.5)
     }
 
@@ -134,6 +233,7 @@ final class SettingsPaneRenderTests: XCTestCase {
         windowController.window?.appearance = nil
 
         applyAppAppearance(named: .aqua)
+        try applyWindowAppearance(named: .aqua, to: windowController)
         pumpRunLoop(seconds: 0.1)
         let restoredToolbar = try XCTUnwrap(windowController.window?.toolbar)
         XCTAssertTrue(restoredToolbar !== darkToolbar, "Dark-to-light must rebuild as well")
@@ -169,6 +269,55 @@ final class SettingsPaneRenderTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testGeneralBatteryProtectionRequirementDefaultsAndToggle() throws {
+        let requirementStore = MemoryBatteryProtectionRequirementStore()
+        let windowController = try makeWindowController(
+            report: readyReport,
+            batteryProtectionRequirement: requirementStore
+        )
+        let checkbox = try XCTUnwrap(
+            findButton(
+                titled: "Require battery protection for Night and Travel at:",
+                in: windowController
+            )
+        )
+        let popUp = try XCTUnwrap(findPopUp(in: windowController))
+
+        XCTAssertEqual(checkbox.state, .on)
+        XCTAssertTrue(popUp.isEnabled)
+        XCTAssertEqual(popUp.titleOfSelectedItem, "15%")
+        XCTAssertEqual(
+            popUp.itemArray.map(\.tag),
+            BatteryProtectionRequirement.allowedPercentages
+        )
+        XCTAssertEqual(popUp.accessibilityLabel(), "Battery level")
+
+        var changeCount = 0
+        windowController.onBatteryProtectionRequirementChanged = { changeCount += 1 }
+        windowController.confirmBatteryProtectionOptOut = { true }
+        let heightBeforeToggle = try contentSize(of: windowController).height
+        checkbox.performClick(nil)
+        pumpRunLoop(seconds: 0.05)
+
+        XCTAssertFalse(requirementStore.batteryProtectionRequirement.isRequired)
+        XCTAssertFalse(popUp.isEnabled)
+        XCTAssertEqual(changeCount, 1)
+        try XCTAssertEqual(
+            contentSize(of: windowController).height,
+            heightBeforeToggle,
+            accuracy: 0.5
+        )
+        try snapshot(windowController, name: "general-battery-off")
+
+        checkbox.performClick(nil)
+        popUp.selectItem(withTag: 30)
+        _ = popUp.sendAction(popUp.action, to: popUp.target)
+        XCTAssertTrue(requirementStore.batteryProtectionRequirement.isRequired)
+        XCTAssertEqual(requirementStore.batteryProtectionRequirement.thresholdPercent, 30)
+        XCTAssertEqual(changeCount, 3)
+    }
+
     /// Captures Setup and Modes in dark and proves the dark pixels are real:
     /// the window resolves dark before capture, the background rasterizes
     /// dark, and each dark capture differs byte-for-byte from a light capture
@@ -179,6 +328,7 @@ final class SettingsPaneRenderTests: XCTestCase {
     @MainActor
     func testDarkAppearanceUsesSemanticColors() throws {
         let windowController = try makeWindowController(report: needsActionReport)
+        try applyWindowAppearance(named: .aqua, to: windowController)
         try selectPane(windowController, .setup)
         waitUntilIdle(windowController)
         let lightSetup = try captureWindowImage(windowController)
@@ -245,7 +395,8 @@ final class SettingsPaneRenderTests: XCTestCase {
     private func makeWindowController(
         report: SetupReport,
         reportDelay: TimeInterval = 0,
-        launchManager: RenderStubLaunchManager = RenderStubLaunchManager()
+        launchManager: RenderStubLaunchManager = RenderStubLaunchManager(),
+        batteryProtectionRequirement: MemoryBatteryProtectionRequirementStore = .init()
     ) throws -> SettingsWindowController {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["RENDER_SETTINGS_PANES"] == "1",
@@ -256,6 +407,7 @@ final class SettingsPaneRenderTests: XCTestCase {
         let windowController = SettingsWindowController(
             controller: RenderStubModeController(report: report, reportDelay: reportDelay),
             store: MemoryStore(),
+            batteryProtectionRequirement: batteryProtectionRequirement,
             launchManager: launchManager
         )
         let window = try XCTUnwrap(windowController.window)
@@ -287,14 +439,35 @@ final class SettingsPaneRenderTests: XCTestCase {
     }
 
     @MainActor
-    private func findLaunchAtLoginCheckbox(
+    private func findButton(
+        titled title: String,
         in windowController: SettingsWindowController
     ) -> NSButton? {
         guard let contentView = windowController.window?.contentView else { return nil }
         var queue: [NSView] = [contentView]
         while let view = queue.popLast() {
-            if let button = view as? NSButton, button.title == "Launch at Login" {
+            if let button = view as? NSButton, button.title == title {
                 return button
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
+    @MainActor
+    private func findLaunchAtLoginCheckbox(
+        in windowController: SettingsWindowController
+    ) -> NSButton? {
+        findButton(titled: "Launch at Login", in: windowController)
+    }
+
+    @MainActor
+    private func findPopUp(in windowController: SettingsWindowController) -> NSPopUpButton? {
+        guard let contentView = windowController.window?.contentView else { return nil }
+        var queue: [NSView] = [contentView]
+        while let view = queue.popLast() {
+            if let popUp = view as? NSPopUpButton {
+                return popUp
             }
             queue.append(contentsOf: view.subviews)
         }
@@ -495,6 +668,66 @@ private final class RenderStubModeController: ModeControlling {
     }
     func hasActiveSessionForQuit() throws -> Bool { fatalError("not used while rendering") }
     func endActiveSessionForQuit() throws { fatalError("not used while rendering") }
+}
+
+private final class SequencedReportModeController: ModeControlling {
+    let firstReportStarted = XCTestExpectation(description: "first setup report started")
+
+    private let reports: [SetupReport]
+    private let firstReportRelease = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var nextReportIndex = 0
+    private var firstReportWasReleased = false
+
+    init(reports: [SetupReport]) {
+        precondition(!reports.isEmpty)
+        self.reports = reports
+    }
+
+    var reportCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return nextReportIndex
+    }
+
+    func releaseFirstReport() {
+        lock.lock()
+        guard !firstReportWasReleased else {
+            lock.unlock()
+            return
+        }
+        firstReportWasReleased = true
+        lock.unlock()
+        firstReportRelease.signal()
+    }
+
+    func setupReport() -> SetupReport {
+        lock.lock()
+        let index = nextReportIndex
+        nextReportIndex += 1
+        lock.unlock()
+
+        if index == 0 {
+            firstReportStarted.fulfill()
+            firstReportRelease.wait()
+        }
+        return reports[min(index, reports.count - 1)]
+    }
+
+    func disableTriggers() throws {}
+    func runClosedDisplayReadinessTest(authorizingSessionReplacement: Bool) throws {}
+    func reconcile() -> ModeSnapshot { fatalError("not used") }
+    func transition(to mode: OperatingMode, replacingActiveSession: Bool) throws -> ModeSnapshot {
+        fatalError("not used")
+    }
+    func handleScreenUnlocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        fatalError("not used")
+    }
+    func resleepAwayModeIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        fatalError("not used")
+    }
+    func hasActiveSessionForQuit() throws -> Bool { fatalError("not used") }
+    func endActiveSessionForQuit() throws { fatalError("not used") }
 }
 
 private final class RenderStubLaunchManager: LaunchAtLoginManaging {

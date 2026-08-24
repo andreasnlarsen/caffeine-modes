@@ -11,6 +11,7 @@ final class SetupStatusPresentationTests: XCTestCase {
         triggers: SetupCheckState = .passed,
         screenLock: SetupCheckState = .passed,
         powerProtect: PowerProtectStatus = .init(isRequired: true, isInstalled: true),
+        batteryProtection: BatteryProtectionStatus = .readyDefault,
         developerDiagnosticPassed: Bool = false,
         developerDiagnosticIsActive: Bool = false,
         amphetamineSessionIsActive: Bool? = false
@@ -23,6 +24,7 @@ final class SetupStatusPresentationTests: XCTestCase {
             triggers: triggers,
             screenLock: screenLock,
             powerProtect: powerProtect,
+            batteryProtection: batteryProtection,
             developerDiagnosticPassed: developerDiagnosticPassed,
             developerDiagnosticIsActive: developerDiagnosticIsActive,
             amphetamineSessionIsActive: amphetamineSessionIsActive
@@ -56,6 +58,9 @@ final class SetupStatusPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.amphetamine.action, .getAmphetamine)
         XCTAssertTrue(presentation.amphetamine.detail.contains("Install"))
         XCTAssertEqual(presentation.automation.indicator, .notChecked)
+        XCTAssertEqual(presentation.batteryProtection.indicator, .notChecked)
+        XCTAssertEqual(presentation.batteryProtection.detail, "Install Amphetamine first.")
+        XCTAssertNil(presentation.batteryProtection.action)
     }
 
     func testUnsupportedVersionOffersUpdateAndNamesTheVersion() {
@@ -70,6 +75,9 @@ final class SetupStatusPresentationTests: XCTestCase {
 
         XCTAssertEqual(presentation.amphetamine.action, .updateAmphetamine)
         XCTAssertTrue(presentation.amphetamine.detail.contains("5.3.1"))
+        XCTAssertEqual(presentation.batteryProtection.indicator, .notChecked)
+        XCTAssertEqual(presentation.batteryProtection.detail, "Update Amphetamine first.")
+        XCTAssertNil(presentation.batteryProtection.action)
     }
 
     func testDeniedAutomationOffersItsMatchingAction() {
@@ -133,6 +141,54 @@ final class SetupStatusPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.isComplete)
     }
 
+    func testBatteryProtectionReadyMismatchUnavailableAndDisabledStates() {
+        let ready = SetupStatusPresentation.make(report: makeReport()).batteryProtection
+        XCTAssertEqual(ready.indicator, .complete)
+        XCTAssertEqual(ready.detail, "Amphetamine ends sessions at 15% on battery.")
+        XCTAssertNil(ready.action)
+
+        let mismatchStatus = BatteryProtectionStatus(
+            requirement: .defaultValue,
+            configuration: AmphetamineBatteryProtectionConfiguration(
+                endsSessionOnLowBattery: true,
+                thresholdPercent: 10,
+                promptsBeforeEnding: false,
+                ignoresLimitOnExternalPower: true
+            )
+        )
+        let mismatch = SetupStatusPresentation.make(
+            report: makeReport(batteryProtection: mismatchStatus)
+        ).batteryProtection
+        XCTAssertEqual(mismatch.indicator, .needsAction)
+        XCTAssertEqual(mismatch.action, .openAmphetamine)
+        XCTAssertEqual(
+            mismatch.detail,
+            "In Session Defaults: end at 15%, no prompt, ignore on power."
+        )
+
+        let unavailable = SetupStatusPresentation.make(
+            report: makeReport(
+                batteryProtection: BatteryProtectionStatus(
+                    requirement: .defaultValue,
+                    configuration: nil
+                )
+            )
+        ).batteryProtection
+        XCTAssertEqual(unavailable.indicator, .needsAction)
+        XCTAssertEqual(unavailable.action, .openAmphetamine)
+
+        let disabled = SetupStatusPresentation.make(
+            report: makeReport(
+                batteryProtection: BatteryProtectionStatus(
+                    requirement: .init(isRequired: false, thresholdPercent: 25),
+                    configuration: nil
+                )
+            )
+        ).batteryProtection
+        XCTAssertEqual(disabled.indicator, .notChecked)
+        XCTAssertNil(disabled.action)
+    }
+
     func testDeveloperDiagnosticNeverBlocksSetup() {
         let failedOrUnused = SetupStatusPresentation.make(
             report: makeReport(developerDiagnosticPassed: false)
@@ -190,7 +246,11 @@ final class SetupStatusPresentationTests: XCTestCase {
         XCTAssertEqual(
             DeveloperDiagnosticAvailability.make(
                 report: makeReport(
-                    powerProtect: .init(isRequired: false, isInstalled: false)
+                    powerProtect: .init(isRequired: false, isInstalled: false),
+                    batteryProtection: BatteryProtectionStatus(
+                        requirement: .init(isRequired: false, thresholdPercent: 15),
+                        configuration: nil
+                    )
                 )
             ),
             DeveloperDiagnosticAvailability(isEnabled: true, blockedStatus: nil)
@@ -219,7 +279,11 @@ final class SetupStatusPresentationTests: XCTestCase {
                 automation: .needsAction,
                 triggers: .needsAction,
                 screenLock: .needsAction,
-                powerProtect: .init(isRequired: true, isInstalled: false)
+                powerProtect: .init(isRequired: true, isInstalled: false),
+                batteryProtection: BatteryProtectionStatus(
+                    requirement: .defaultValue,
+                    configuration: nil
+                )
             )
         )
 
@@ -228,5 +292,7 @@ final class SetupStatusPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.triggers.action, .disableTriggers)
         XCTAssertEqual(presentation.screenLock.action, .openLockScreenSettings)
         XCTAssertEqual(presentation.powerProtect.action, .getPowerProtect)
+        XCTAssertEqual(presentation.batteryProtection.indicator, .notChecked)
+        XCTAssertNil(presentation.batteryProtection.action)
     }
 }

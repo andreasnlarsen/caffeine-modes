@@ -58,6 +58,18 @@ final class ApplicationCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.consumeCompletionAfterRefresh())
     }
 
+    func testSetupReportRefreshStartsNowOrCoalescesOneRerun() {
+        var state = SetupReportRefreshState()
+
+        XCTAssertTrue(state.request(isBusy: false))
+        XCTAssertFalse(state.finishCurrentRefresh())
+
+        XCTAssertFalse(state.request(isBusy: true))
+        XCTAssertFalse(state.request(isBusy: true))
+        XCTAssertTrue(state.finishCurrentRefresh())
+        XCTAssertFalse(state.finishCurrentRefresh())
+    }
+
     func testStatusRefreshDisablesQuitButKeepsModeSelectionAvailable() {
         let activity = MenuActivityPolicy(
             setupIsBusy: false,

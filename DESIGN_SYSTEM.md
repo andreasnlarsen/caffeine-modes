@@ -87,9 +87,11 @@ Every symbol uses an accessibility description. No SF Symbol appears in the Find
 - A native selectable toolbar contains General, Setup, and Modes. The window title names the selected pane.
 - Each pane ends one outer inset below its final control or note. The window does not reserve an empty fixed-height canvas.
 - Developer appears only when the user holds Option while opening Settings.
-- General contains Launch at Login and the Off-or-Work suggestion shown after Night or Travel unlocks. The user must confirm before the app changes Amphetamine.
+- General contains Launch at Login, the Off-or-Work suggestion shown after Night or Travel unlocks, and one battery-protection requirement. The user must confirm unlock suggestions before the app changes Amphetamine.
+- The battery row uses one native checkbox followed by one compact pop-up. Its exact title is `Require battery protection for Night and Travel at:`. Values are 5%, 10%, 15%, 20%, 25%, and 30%; 15% is the default. When disabled, the pop-up keeps the selected value and becomes inactive. The short footnote says `Night and Travel will not start until Amphetamine matches.` Turning the requirement off needs one native confirmation. No slider, card, decorative icon, or custom color appears.
 - General states once, as a short footnote, that starting Work turns off Amphetamine’s closed-display mode and that this includes sessions the user starts in Amphetamine. No other pane repeats this fact.
-- Setup contains Amphetamine, Automation, Triggers, immediate lock, and Power Protect as five self-contained rows.
+- Setup contains Amphetamine, Automation, Triggers, immediate lock, Power Protect, and Amphetamine battery protection as six self-contained rows.
+- The battery row states whether Amphetamine ends sessions at the required percentage on battery power. A mismatch says `In Session Defaults: end at 15%, no prompt, ignore on power.` with the selected percentage and offers `Open Amphetamine`. Caffeine Modes never claims that it changed those settings.
 - Each row shows a 16-point state symbol, a title, a per-row detail line, and at most one trailing action. Rows that pass show no action. A row that cannot run yet names its precondition instead of opening a confirmation.
 - Every check uses one of three honest states: complete, needs action, or not checked. A check that has never run uses the not-checked symbol, never a warning.
 - Setup never requires a one-minute test. It reports readiness in a few seconds.

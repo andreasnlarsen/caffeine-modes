@@ -4,6 +4,8 @@ import CaffeineModesCore
 
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
+    private typealias AcceptedSetupReportHandler = @MainActor (SetupReport) -> Void
+
     enum Pane: String {
         case general
         case setup
@@ -40,6 +42,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     private let runner: SettingsCheckRunner
     private let store: ModeStateStoring
+    private let batteryProtectionRequirement: BatteryProtectionRequirementStoring
     private let launchManager: LaunchAtLoginManaging
 
     private let contentHost = NSView()
@@ -52,12 +55,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
     private let launchCheckbox = NSButton(checkboxWithTitle: "Launch at Login", target: nil, action: nil)
     private let unlockOffButton = NSButton(radioButtonWithTitle: "Off", target: nil, action: nil)
     private let unlockWorkButton = NSButton(radioButtonWithTitle: "Work", target: nil, action: nil)
+    private let batteryProtectionCheckbox = NSButton(
+        checkboxWithTitle: "Require battery protection for Night and Travel at:",
+        target: nil,
+        action: nil
+    )
+    private let batteryProtectionPercentPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let batteryProtectionNote = NSTextField(labelWithString: "")
 
     private let amphetamineRow = SetupRowView()
     private let automationRow = SetupRowView()
     private let triggersRow = SetupRowView()
     private let screenLockRow = SetupRowView()
     private let powerProtectRow = SetupRowView()
+    private let batteryProtectionRow = SetupRowView()
     private let setupSummaryLabel = NSTextField(labelWithString: "")
     private let setupSpinner = NSProgressIndicator()
     private let checkAgainButton = NSButton(title: "Check Again", target: nil, action: nil)
@@ -77,12 +88,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
     private var lastRefreshFinishedAt: TimeInterval = -.greatestFiniteMagnitude
     private var autoRefreshTask: Task<Void, Never>?
     private var completionCoordinator = SetupCompletionCoordinator()
+    private var reportRefreshState = SetupReportRefreshState()
 
     var onSetupCompleted: (() -> Void)?
     var onWorkFinished: (() -> Void)?
+    var onBatteryProtectionRequirementChanged: (() -> Void)?
+    var confirmBatteryProtectionOptOut: (() -> Bool)?
 
     private var allRows: [SetupRowView] {
-        [amphetamineRow, automationRow, triggersRow, screenLockRow, powerProtectRow]
+        [
+            amphetamineRow,
+            automationRow,
+            triggersRow,
+            screenLockRow,
+            powerProtectRow,
+            batteryProtectionRow
+        ]
     }
 
     var isBusy: Bool {
@@ -95,10 +116,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
     init(
         controller: ModeControlling,
         store: ModeStateStoring,
+        batteryProtectionRequirement: BatteryProtectionRequirementStoring,
         launchManager: LaunchAtLoginManaging
     ) {
         self.runner = SettingsCheckRunner(controller: controller)
         self.store = store
+        self.batteryProtectionRequirement = batteryProtectionRequirement
         self.launchManager = launchManager
         let window = SettingsWindow(
             contentRect: NSRect(
@@ -155,9 +178,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
             completion(false)
             return
         }
-        activity = .refreshing
-        completionCoordinator.beginRefresh()
-        runner.fetchReport { [weak self] report in
+        beginRefresh(userInitiated: false) { [weak self] report in
             guard let self else {
                 completion(false)
                 return
@@ -168,7 +189,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
                 self.select(.setup, refresh: false)
                 self.showWindowWithoutRefresh()
             }
-            self.finishRefresh(report: report, announceResult: false)
             completion(report.isReady)
         }
     }
@@ -297,7 +317,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
     // MARK: - General
 
     private func makeGeneralView() -> NSView {
-        let intro = detailText("Caffeine Modes asks before it changes Amphetamine.")
+        let intro = detailText("After you unlock, Caffeine Modes asks before it changes Amphetamine.")
 
         let unlockLabel = NSTextField(labelWithString: "Suggested action after unlock")
         unlockLabel.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
@@ -311,11 +331,34 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         unlockStack.alignment = .leading
         unlockStack.spacing = 8
 
+        let batteryRow = NSStackView(views: [
+            batteryProtectionCheckbox,
+            batteryProtectionPercentPopUp
+        ])
+        batteryRow.orientation = .horizontal
+        batteryRow.alignment = .firstBaseline
+        batteryRow.spacing = 8
+
+        batteryProtectionNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        batteryProtectionNote.textColor = .secondaryLabelColor
+        let batteryStack = NSStackView(views: [batteryRow, batteryProtectionNote])
+        batteryStack.orientation = .vertical
+        batteryStack.alignment = .leading
+        batteryStack.spacing = 8
+
         let workLidNote = detailText(
             "Starting Work turns off Amphetamine’s closed-display mode, so the lid follows normal macOS behavior. That includes sessions you start in Amphetamine yourself."
         )
 
-        let stack = NSStackView(views: [launchCheckbox, separator(), unlockStack, separator(), workLidNote])
+        let stack = NSStackView(views: [
+            launchCheckbox,
+            separator(),
+            unlockStack,
+            separator(),
+            batteryStack,
+            separator(),
+            workLidNote
+        ])
         return paneStack(stack, spacing: 20)
     }
 
@@ -326,6 +369,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         unlockOffButton.action = #selector(selectPostUnlockOff)
         unlockWorkButton.target = self
         unlockWorkButton.action = #selector(selectPostUnlockWork)
+        batteryProtectionCheckbox.target = self
+        batteryProtectionCheckbox.action = #selector(toggleBatteryProtectionRequirement)
+        batteryProtectionPercentPopUp.target = self
+        batteryProtectionPercentPopUp.action = #selector(selectBatteryProtectionThreshold)
+        for percentage in BatteryProtectionRequirement.allowedPercentages {
+            batteryProtectionPercentPopUp.addItem(withTitle: "\(percentage)%")
+            batteryProtectionPercentPopUp.lastItem?.tag = percentage
+        }
+        batteryProtectionPercentPopUp.setAccessibilityLabel("Battery level")
+        batteryProtectionPercentPopUp.setContentCompressionResistancePriority(
+            .required,
+            for: .horizontal
+        )
 
         setupSpinner.style = .spinning
         setupSpinner.controlSize = .small
@@ -339,6 +395,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         launchCheckbox.state = launchManager.isEnabled ? .on : .off
         unlockOffButton.state = store.postUnlockMode == .off ? .on : .off
         unlockWorkButton.state = store.postUnlockMode == .work ? .on : .off
+        let requirement = batteryProtectionRequirement.batteryProtectionRequirement
+        batteryProtectionCheckbox.state = requirement.isRequired ? .on : .off
+        batteryProtectionPercentPopUp.selectItem(withTag: requirement.thresholdPercent)
+        batteryProtectionPercentPopUp.isEnabled = requirement.isRequired
+        batteryProtectionNote.stringValue = requirement.isRequired
+            ? "Night and Travel will not start until Amphetamine matches."
+            : "Caffeine Modes will not check Amphetamine’s battery limit."
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -361,6 +424,49 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         refreshGeneralControls()
     }
 
+    @objc private func toggleBatteryProtectionRequirement() {
+        var requirement = batteryProtectionRequirement.batteryProtectionRequirement
+        if batteryProtectionCheckbox.state == .off {
+            let confirmed = confirmBatteryProtectionOptOut?()
+                ?? presentBatteryProtectionOptOutConfirmation()
+            guard confirmed else {
+                refreshGeneralControls()
+                return
+            }
+        }
+        requirement.isRequired = batteryProtectionCheckbox.state == .on
+        batteryProtectionRequirement.batteryProtectionRequirement = requirement
+        refreshGeneralControls()
+        refreshSetupAfterBatteryProtectionChange()
+        onBatteryProtectionRequirementChanged?()
+    }
+
+    private func presentBatteryProtectionOptOutConfirmation() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Stop Requiring Battery Protection?"
+        alert.informativeText = "Night and Travel can start without a matching Amphetamine battery limit. Amphetamine keeps its own settings."
+        alert.addButton(withTitle: "Stop Requiring")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    @objc private func selectBatteryProtectionThreshold() {
+        guard let selectedItem = batteryProtectionPercentPopUp.selectedItem else { return }
+        var requirement = batteryProtectionRequirement.batteryProtectionRequirement
+        requirement.thresholdPercent = selectedItem.tag
+        batteryProtectionRequirement.batteryProtectionRequirement = requirement
+        refreshGeneralControls()
+        refreshSetupAfterBatteryProtectionChange()
+        onBatteryProtectionRequirementChanged?()
+    }
+
+    private func refreshSetupAfterBatteryProtectionChange() {
+        completionCoordinator.beginRefresh()
+        latestReport = nil
+        guard reportRefreshState.request(isBusy: activity != .idle) else { return }
+        beginRefresh(userInitiated: false)
+    }
+
     // MARK: - Setup
 
     private func makeSetupView() -> NSView {
@@ -371,7 +477,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         )
         let awayModes = groupBlock(
             title: SetupStatusPresentation.displaySleepGroupTitle,
-            rows: [screenLockRow, powerProtectRow]
+            rows: [screenLockRow, powerProtectRow, batteryProtectionRow]
         )
 
         setupSummaryLabel.textColor = .secondaryLabelColor
@@ -393,7 +499,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         allRows.forEach {
             $0.widthAnchor.constraint(equalToConstant: SettingsLayout.contentWidth).isActive = true
         }
-        apply(.checking)
+        let presentation = latestReport.map {
+            SetupStatusPresentation.make(
+                report: $0,
+                triggersActionFailure: triggersFailure
+            )
+        } ?? .checking
+        apply(presentation)
         return view
     }
 
@@ -407,7 +519,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         beginRefresh(userInitiated: false)
     }
 
-    private func beginRefresh(userInitiated: Bool) {
+    private func beginRefresh(
+        userInitiated: Bool,
+        acceptedReport: AcceptedSetupReportHandler? = nil
+    ) {
         guard activity == .idle else { return }
         activity = .refreshing
         completionCoordinator.beginRefresh()
@@ -415,13 +530,29 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         setupSummaryLabel.stringValue = "Checking…"
         setControlsDisabled(true)
         runner.fetchReport { [weak self] report in
-            self?.finishRefresh(report: report, announceResult: userInitiated)
+            guard let self else {
+                acceptedReport?(report)
+                return
+            }
+            self.finishRefresh(
+                report: report,
+                announceResult: userInitiated,
+                acceptedReport: acceptedReport
+            )
         }
     }
 
-    private func finishRefresh(report: SetupReport, announceResult: Bool) {
-        latestReport = report
+    private func finishRefresh(
+        report: SetupReport,
+        announceResult: Bool,
+        acceptedReport: AcceptedSetupReportHandler? = nil
+    ) {
         activity = .idle
+        if reportRefreshState.finishCurrentRefresh() {
+            beginRefresh(userInitiated: false, acceptedReport: acceptedReport)
+            return
+        }
+        latestReport = report
         lastRefreshFinishedAt = ProcessInfo.processInfo.systemUptime
         if report.triggers == .passed { triggersFailure = nil }
         let presentation = SetupStatusPresentation.make(
@@ -435,6 +566,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
         announceIfNeeded(presentation.summary, force: announceResult)
         onWorkFinished?()
+        acceptedReport?(report)
     }
 
     private func render(_ presentation: SetupStatusPresentation) {
@@ -455,6 +587,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         triggersRow.apply(presentation.triggers, target: self, action: action)
         screenLockRow.apply(presentation.screenLock, target: self, action: action)
         powerProtectRow.apply(presentation.powerProtect, target: self, action: action)
+        batteryProtectionRow.apply(presentation.batteryProtection, target: self, action: action)
         setupSpinner.stopAnimation(nil)
         setupSummaryLabel.stringValue = presentation.summary
         setupSummaryLabel.textColor = presentation.isComplete ? .labelColor : .secondaryLabelColor
@@ -486,7 +619,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
             confirmAndDisableTriggers()
         case .getPowerProtect:
             open("https://github.com/x74353/Amphetamine-Power-Protect")
+        case .openAmphetamine:
+            openAmphetamine()
         }
+    }
+
+    private func openAmphetamine() {
+        guard let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.if.Amphetamine"
+        ) else {
+            open("https://apps.apple.com/app/amphetamine/id937984704")
+            return
+        }
+        NSWorkspace.shared.openApplication(
+            at: url,
+            configuration: NSWorkspace.OpenConfiguration()
+        )
     }
 
     private func confirmAndDisableTriggers() {

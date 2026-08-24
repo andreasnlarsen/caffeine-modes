@@ -32,6 +32,10 @@ public protocol ClamshellContextInspecting: AnyObject {
     func currentContext() -> ClamshellContext
 }
 
+public protocol AmphetamineBatteryProtectionInspecting: AnyObject {
+    func inspect(timeout: TimeInterval) throws -> AmphetamineBatteryProtectionConfiguration?
+}
+
 public protocol DisplaySleeping: AnyObject {
     func sleepDisplay(timeout: TimeInterval) throws
 }
@@ -42,6 +46,10 @@ public protocol ModeStateStoring: AnyObject {
     var closedDisplayReadinessPassed: Bool { get set }
     var launchAtLoginPromptWasShown: Bool { get set }
     var postUnlockMode: PostUnlockMode { get set }
+}
+
+public protocol BatteryProtectionRequirementStoring: AnyObject {
+    var batteryProtectionRequirement: BatteryProtectionRequirement { get set }
 }
 
 public protocol TimeProviding: AnyObject {

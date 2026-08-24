@@ -37,15 +37,19 @@ case "$requirement" in
         rg -q 'testAutomationDenialIsReported' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testCompletedSetupCloseDeliversOnboardingOnce' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
         rg -q 'testSetupChecksUseIndependentDeadlines' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
+        rg -q 'testStartupCompletionWaitsForCoalescedBatteryReport' "$project_root/Tests/CaffeineModesCoreTests/SettingsPaneRenderTests.swift"
+        rg -q 'testStartupNeedsAttentionReportDoesNotRevertToChecking' "$project_root/Tests/CaffeineModesCoreTests/SettingsPaneRenderTests.swift"
         rg -q 'testPositiveDeviceGracePeriodIsNotImmediate' "$project_root/Tests/CaffeineModesCoreTests/ScreenLockStatusParserTests.swift"
         rg -q 'testReadinessClosedDisplayPostMutationErrorRetainsObservedCleanupProjection' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testClosedDisplayReadinessAnchorsExpiryAfterDelayedSessionCreation' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
+        rg -q 'testClosedDisplayReadinessRechecksBatteryProtectionBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testReadinessActivePastExpectedExpiryIsBackendMismatch' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testQuitInspectionRejectsUnsupportedAmphetamineBeforeRead' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testQuitEndRejectsUnsupportedAmphetamineBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testReadinessClosedDisplayPostMutationErrorRetainsObservedCleanupProjection' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         rg -q 'testDisableTriggersRecoversPostMutationTimeoutWithinOriginalDeadline' "$project_root/Tests/CaffeineModesCoreTests/SetupAndVersionTests.swift"
         run_tests 'SetupAndVersionTests|SetupStatusPresentationTests|ScreenLockStatusParserTests|ApplicationCoordinatorTests/test.*SetupClose'
+        run_tests 'SettingsPaneRenderTests/testStartupCompletionWaitsForCoalescedBatteryReport'
         run_tests 'ModeControllerTests/testQuit.*UnsupportedAmphetamine'
         ;;
     REQ-003)
@@ -124,8 +128,20 @@ case "$requirement" in
         rg -q 'testOnlyActiveAwakeNonBuiltinDisplayIsEligible' "$project_root/Tests/CaffeineModesCoreTests/SystemClamshellContextInspectorTests.swift"
         rg -q 'testStableContextFailsClosedWhenLidChangesDuringRead' "$project_root/Tests/CaffeineModesCoreTests/SystemClamshellContextInspectorTests.swift"
         rg -q 'testUnlockNeverMutatesUnownedCustomSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testBatteryProtectionMismatchBlocksNightAndTravelBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testUnavailableBatteryProtectionFailsClosedForNight' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testDisabledBatteryProtectionRequirementAllowsNightAndTravel' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testBatteryProtectionNeverBlocksWork' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testBatteryProtectionIsRecheckedBeforeReplacingAnActiveSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testBatteryProtectionInspectionTimeoutBeforeReplacementPreservesActiveSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testBatteryProtectionIsRecheckedAfterReplacementBeforeAwayModeStarts' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testBatteryProtectionInspectionUsesRemainingTransitionDeadline' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testBatteryRequirementChangeDuringInspectionFailsClosedBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testRequiredProtectionMatchesOnlyTheCompleteSafeConfiguration' "$project_root/Tests/CaffeineModesCoreTests/BatteryProtectionStatusTests.swift"
+        rg -q 'testFailsClosedForMissingMalformedOrOutOfRangeValues' "$project_root/Tests/CaffeineModesCoreTests/AmphetamineBatteryProtectionInspectorTests.swift"
+        rg -q 'allowedPercentages = \[5, 10, 15, 20, 25, 30\]' "$project_root/Sources/CaffeineModesCore/Domain.swift"
         rg -Fq 'with timeout of \(timeoutLiteral) seconds' "$project_root/Sources/CaffeineModesApp/AmphetamineClient.swift"
-        run_tests 'ModeControllerTests|SystemClamshellContextInspectorTests|ApplicationCoordinatorTests|SetupAndVersionTests/testReadiness.*Mutation'
+        run_tests 'ModeControllerTests|BatteryProtectionStatusTests|AmphetamineBatteryProtectionInspectorTests|SystemClamshellContextInspectorTests|ApplicationCoordinatorTests|SetupAndVersionTests/testReadiness.*Mutation'
         ;;
     REQ-007)
         rg -q 'NSStatusBar.system.statusItem' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
@@ -135,7 +151,9 @@ case "$requirement" in
         rg -q 'How Modes Work…' "$project_root/Sources/CaffeineModesApp/MenuBarController.swift"
         rg -q 'case developer' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
         rg -Fq 'Open + external' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
-        run_tests 'PowerStatusPresentationTests|SetupStatusPresentationTests'
+        rg -Fq 'Require battery protection for Night and Travel at:' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
+        rg -q 'testGeneralBatteryProtectionRequirementDefaultsAndToggle' "$project_root/Tests/CaffeineModesCoreTests/SettingsPaneRenderTests.swift"
+        run_tests 'PowerStatusPresentationTests|SetupStatusPresentationTests|UserDefaultsModeStoreTests'
         "$project_root/Scripts/verify-app.sh" >/dev/null 2>&1
         ;;
     REQ-008)

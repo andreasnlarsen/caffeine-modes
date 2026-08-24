@@ -317,6 +317,125 @@ final class SystemClamshellContextInspector: ClamshellContextInspecting {
     }
 }
 
+final class AmphetamineBatteryProtectionInspector: AmphetamineBatteryProtectionInspecting {
+    private final class PreferenceRead: @unchecked Sendable {
+        let synchronize: () -> Bool
+        let readSnapshot: () -> [String: Any]?
+
+        init(
+            synchronize: @escaping () -> Bool,
+            readSnapshot: @escaping () -> [String: Any]?
+        ) {
+            self.synchronize = synchronize
+            self.readSnapshot = readSnapshot
+        }
+
+        func configuration() -> AmphetamineBatteryProtectionConfiguration? {
+            guard synchronize(), let snapshot = readSnapshot() else { return nil }
+            return AmphetamineBatteryProtectionInspector.configuration(from: snapshot)
+        }
+    }
+
+    private static let enabledKey = "End Session On Low Battery"
+    private static let thresholdKey = "Low Battery Percent"
+    private static let promptKey = "Always Ask to End For Low Battery"
+    private static let ignoreOnPowerKey = "Ignore Battery on AC"
+
+    private static let preferenceKeys = [
+        enabledKey,
+        thresholdKey,
+        promptKey,
+        ignoreOnPowerKey
+    ]
+
+    private let inspections: FreshSingleFlight<AmphetamineBatteryProtectionConfiguration?>
+
+    init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        let domain = homeDirectory
+            .appendingPathComponent("Library/Containers/com.if.Amphetamine/Data/Library/Preferences")
+            .appendingPathComponent("com.if.Amphetamine")
+            .path as CFString
+        let preferenceRead = PreferenceRead(synchronize: {
+            CFPreferencesSynchronize(
+                domain,
+                kCFPreferencesCurrentUser,
+                kCFPreferencesAnyHost
+            )
+        }, readSnapshot: {
+            CFPreferencesCopyMultiple(
+                Self.preferenceKeys as CFArray,
+                domain,
+                kCFPreferencesCurrentUser,
+                kCFPreferencesAnyHost
+            ) as? [String: Any]
+        })
+        inspections = FreshSingleFlight {
+            preferenceRead.configuration()
+        }
+    }
+
+    init(
+        synchronize: @escaping () -> Bool,
+        readSnapshot: @escaping () -> [String: Any]?
+    ) {
+        let preferenceRead = PreferenceRead(
+            synchronize: synchronize,
+            readSnapshot: readSnapshot
+        )
+        inspections = FreshSingleFlight {
+            preferenceRead.configuration()
+        }
+    }
+
+    func inspect(timeout: TimeInterval) throws -> AmphetamineBatteryProtectionConfiguration? {
+        try inspections.value(timeout: timeout)
+    }
+
+    static func configuration(
+        from dictionary: [String: Any]
+    ) -> AmphetamineBatteryProtectionConfiguration? {
+        guard let enabled = strictBoolean(dictionary[enabledKey]),
+              let threshold = strictInteger(dictionary[thresholdKey]),
+              (0...100).contains(threshold),
+              let prompts = strictBoolean(dictionary[promptKey]),
+              let ignoresOnPower = strictBoolean(dictionary[ignoreOnPowerKey])
+        else { return nil }
+        return AmphetamineBatteryProtectionConfiguration(
+            endsSessionOnLowBattery: enabled,
+            thresholdPercent: threshold,
+            promptsBeforeEnding: prompts,
+            ignoresLimitOnExternalPower: ignoresOnPower
+        )
+    }
+
+    private static func strictBoolean(_ value: Any?) -> Bool? {
+        guard let value, let number = value as? NSNumber else { return nil }
+        let typeID = CFGetTypeID(value as CFTypeRef)
+        if typeID == CFBooleanGetTypeID() {
+            return number.boolValue
+        }
+        guard typeID == CFNumberGetTypeID(),
+              let integer = strictInteger(value)
+        else { return nil }
+        switch integer {
+        case 0: return false
+        case 1: return true
+        default: return nil
+        }
+    }
+
+    private static func strictInteger(_ value: Any?) -> Int? {
+        guard let value,
+              CFGetTypeID(value as CFTypeRef) == CFNumberGetTypeID(),
+              let number = value as? NSNumber,
+              !CFNumberIsFloatType(number)
+        else { return nil }
+        let doubleValue = number.doubleValue
+        guard doubleValue.isFinite, doubleValue.rounded() == doubleValue else { return nil }
+        return Int(exactly: number.int64Value)
+    }
+}
+
 final class PMSetDisplaySleeper: DisplaySleeping {
     func sleepDisplay(timeout: TimeInterval) throws {
         let result = try BoundedProcessRunner.run(

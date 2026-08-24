@@ -920,6 +920,44 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertEqual(fixture.assertions.receivedTimeouts.count, 1)
     }
 
+    func testBatteryProtectionInspectionUsesRemainingTransitionDeadline() {
+        let fixture = Fixture()
+        fixture.amphetamine.onOperation = { _ in
+            fixture.monotonicClock.now += 0.5
+        }
+        fixture.batteryProtection.onOperation = { timeout in
+            XCTAssertEqual(timeout, 1, accuracy: 0.01)
+            fixture.monotonicClock.now += 1.1
+        }
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(to: .night, replacingActiveSession: true)
+        ) { error in
+            XCTAssertEqual(error as? ModeControlError, .operationTimedOut)
+        }
+        XCTAssertEqual(fixture.batteryProtection.receivedTimeouts.count, 1)
+        XCTAssertFalse(fixture.amphetamine.commands.contains(where: { $0.hasPrefix("start") }))
+        XCTAssertEqual(fixture.display.sleepCount, 0)
+    }
+
+    func testBatteryRequirementChangeDuringInspectionFailsClosedBeforeMutation() {
+        let fixture = Fixture()
+        fixture.batteryProtection.onOperation = { _ in
+            fixture.batteryProtectionRequirement.batteryProtectionRequirement = .init(
+                isRequired: true,
+                thresholdPercent: 30
+            )
+        }
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(to: .night, replacingActiveSession: true)
+        ) { error in
+            XCTAssertEqual(error as? ModeControlError, .batteryProtectionNotConfigured(.night))
+        }
+        XCTAssertFalse(fixture.amphetamine.commands.contains(where: { $0.hasPrefix("start") }))
+        XCTAssertEqual(fixture.display.sleepCount, 0)
+    }
+
     func testNightSleepsDisplayOnlyAfterAmphetamineVerification() throws {
         let fixture = Fixture()
         var markerAtDisplaySleep: OwnedSessionSignature?
@@ -2146,6 +2184,147 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 30)
         XCTAssertEqual(fixture.display.sleepCount, sleepCount)
         XCTAssertEqual(fixture.screenLockState.callCount, 0)
+    }
+
+    func testBatteryProtectionMismatchBlocksNightAndTravelBeforeMutation() {
+        for mode in [
+            OperatingMode.night,
+            .travel(durationMinutes: 90, expiresAt: Date())
+        ] {
+            let fixture = Fixture()
+            fixture.batteryProtection.configuration?.thresholdPercent = 10
+
+            XCTAssertThrowsError(
+                try fixture.controller.transition(to: mode, replacingActiveSession: true)
+            ) { error in
+                XCTAssertEqual(error as? ModeControlError, .batteryProtectionNotConfigured(mode))
+            }
+            XCTAssertFalse(fixture.amphetamine.commands.contains { $0.hasPrefix("start") })
+            XCTAssertFalse(fixture.amphetamine.commands.contains("end"))
+        }
+    }
+
+    func testUnavailableBatteryProtectionFailsClosedForNight() {
+        let fixture = Fixture()
+        fixture.batteryProtection.configuration = nil
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(to: .night, replacingActiveSession: true)
+        ) { error in
+            XCTAssertEqual(error as? ModeControlError, .batteryProtectionNotConfigured(.night))
+        }
+        XCTAssertFalse(fixture.amphetamine.commands.contains { $0.hasPrefix("start") })
+    }
+
+    func testDisabledBatteryProtectionRequirementAllowsNightAndTravel() throws {
+        for mode in [
+            OperatingMode.night,
+            .travel(durationMinutes: 90, expiresAt: Date())
+        ] {
+            let fixture = Fixture()
+            fixture.batteryProtectionRequirement.batteryProtectionRequirement = .init(
+                isRequired: false,
+                thresholdPercent: 15
+            )
+            fixture.batteryProtection.configuration = nil
+
+            let snapshot = try fixture.controller.transition(
+                to: mode,
+                replacingActiveSession: true
+            )
+
+            XCTAssertEqual(snapshot.requestedMode.displayName, mode.displayName)
+            XCTAssertEqual(fixture.batteryProtection.callCount, 0)
+        }
+    }
+
+    func testBatteryProtectionNeverBlocksWork() throws {
+        let fixture = Fixture()
+        fixture.batteryProtection.configuration = nil
+
+        let snapshot = try fixture.controller.transition(
+            to: .work,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .work)
+    }
+
+    func testBatteryProtectionIsRecheckedBeforeReplacingAnActiveSession() throws {
+        let fixture = Fixture()
+        let active = try fixture.controller.transition(to: .night, replacingActiveSession: true)
+        let matching = try XCTUnwrap(fixture.batteryProtection.configuration)
+        var mismatch = matching
+        mismatch.thresholdPercent = 10
+        fixture.batteryProtection.queuedConfigurations = [matching, mismatch]
+        let commandCount = fixture.amphetamine.commands.count
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(
+                to: .travel(durationMinutes: 90, expiresAt: Date()),
+                replacingActiveSession: true
+            )
+        )
+
+        let commands = fixture.amphetamine.commands.dropFirst(commandCount)
+        XCTAssertFalse(commands.contains("end"))
+        XCTAssertFalse(commands.contains { $0.hasPrefix("start") })
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertTrue(fixture.amphetamine.state.displaySleepAllowed)
+
+        let reconciled = fixture.controller.reconcile()
+        XCTAssertEqual(reconciled.requestedMode, .night)
+        XCTAssertEqual(reconciled.health, .ready)
+        XCTAssertEqual(reconciled.ownershipMarker?.id, active.ownershipMarker?.id)
+    }
+
+    func testBatteryProtectionInspectionTimeoutBeforeReplacementPreservesActiveSession() throws {
+        let fixture = Fixture()
+        let active = try fixture.controller.transition(to: .night, replacingActiveSession: true)
+        let commandCount = fixture.amphetamine.commands.count
+        fixture.batteryProtection.onOperation = { _ in
+            if fixture.batteryProtection.callCount == 4 {
+                fixture.batteryProtection.error = ModeControlError.operationTimedOut
+            }
+        }
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(
+                to: .travel(durationMinutes: 90, expiresAt: Date()),
+                replacingActiveSession: true
+            )
+        ) { error in
+            XCTAssertEqual(error as? ModeControlError, .operationTimedOut)
+        }
+
+        let commands = fixture.amphetamine.commands.dropFirst(commandCount)
+        XCTAssertFalse(commands.contains("end"))
+        XCTAssertFalse(commands.contains { $0.hasPrefix("start") })
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+
+        let reconciled = fixture.controller.reconcile()
+        XCTAssertEqual(reconciled.requestedMode, .night)
+        XCTAssertEqual(reconciled.health, .ready)
+        XCTAssertEqual(reconciled.ownershipMarker?.id, active.ownershipMarker?.id)
+    }
+
+    func testBatteryProtectionIsRecheckedAfterReplacementBeforeAwayModeStarts() throws {
+        let fixture = Fixture()
+        _ = try fixture.controller.transition(to: .work, replacingActiveSession: true)
+        let matching = try XCTUnwrap(fixture.batteryProtection.configuration)
+        var mismatch = matching
+        mismatch.thresholdPercent = 10
+        fixture.batteryProtection.queuedConfigurations = [matching, matching, mismatch]
+        let commandCount = fixture.amphetamine.commands.count
+
+        XCTAssertThrowsError(
+            try fixture.controller.transition(to: .night, replacingActiveSession: true)
+        )
+
+        let commands = fixture.amphetamine.commands.dropFirst(commandCount)
+        XCTAssertTrue(commands.contains("end"))
+        XCTAssertFalse(commands.contains("startInfinite:true"))
+        XCTAssertFalse(fixture.amphetamine.state.sessionIsActive)
     }
 }
 

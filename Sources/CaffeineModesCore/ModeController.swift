@@ -9,6 +9,8 @@ public final class ModeController: ModeControlling {
     private let clamshellContext: ClamshellContextInspecting
     private let display: DisplaySleeping
     private let store: ModeStateStoring
+    private let batteryProtection: AmphetamineBatteryProtectionInspecting
+    private let batteryProtectionRequirement: BatteryProtectionRequirementStoring
     private let clock: TimeProviding
     private let monotonicClock: MonotonicTimeProviding
     private let operationTimeout: TimeInterval
@@ -29,6 +31,8 @@ public final class ModeController: ModeControlling {
         clamshellContext: ClamshellContextInspecting,
         display: DisplaySleeping,
         store: ModeStateStoring,
+        batteryProtection: AmphetamineBatteryProtectionInspecting,
+        batteryProtectionRequirement: BatteryProtectionRequirementStoring,
         clock: TimeProviding = SystemTimeProvider(),
         monotonicClock: MonotonicTimeProviding = SystemMonotonicTimeProvider(),
         operationTimeout: TimeInterval = 2,
@@ -42,6 +46,8 @@ public final class ModeController: ModeControlling {
         self.clamshellContext = clamshellContext
         self.display = display
         self.store = store
+        self.batteryProtection = batteryProtection
+        self.batteryProtectionRequirement = batteryProtectionRequirement
         self.clock = clock
         self.monotonicClock = monotonicClock
         self.operationTimeout = operationTimeout
@@ -194,6 +200,9 @@ public final class ModeController: ModeControlling {
                     sourceMode: preflightSourceMode,
                     targetMode: targetMode
                 )
+                if targetMode.requiresDisplaySleep {
+                    try requireBatteryProtection(for: targetMode, deadline: deadline)
+                }
                 preStartMutationWasAttempted = true
                 try endAmphetamineSession(deadline: deadline)
                 startState = try readAmphetamineState(deadline: deadline)
@@ -218,6 +227,7 @@ public final class ModeController: ModeControlling {
             switch targetMode {
             case .off:
                 if preflightState.sessionIsActive {
+                    preStartMutationWasAttempted = true
                     try endAmphetamineSession(deadline: deadline)
                 }
             case .work:
@@ -234,6 +244,7 @@ public final class ModeController: ModeControlling {
                 )
                 try checkDeadline(deadline)
             case .night:
+                try requireBatteryProtection(for: targetMode, deadline: deadline)
                 sessionStartWasAttempted = true
                 try amphetamine.startInfiniteSession(
                     displaySleepAllowed: true,
@@ -257,6 +268,7 @@ public final class ModeController: ModeControlling {
                 )
                 try checkDeadline(deadline)
             case let .travel(durationMinutes, _):
+                try requireBatteryProtection(for: targetMode, deadline: deadline)
                 sessionStartWasAttempted = true
                 try amphetamine.startTimedSession(
                     minutes: durationMinutes,
@@ -318,15 +330,13 @@ public final class ModeController: ModeControlling {
 
             return snapshot(committedMode, observed, .ready, marker: marker)
         } catch {
-            if !preStartMutationWasAttempted,
-               !sessionStartWasAttempted,
-               let modeError = error as? ModeControlError {
-                switch modeError {
-                case .openLidBeforeReplacingClosedDisplaySession:
+            if !preStartMutationWasAttempted, !sessionStartWasAttempted {
+                if let modeError = error as? ModeControlError {
                     throw modeError
-                default:
-                    break
                 }
+                let detail = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                throw ModeControlError.backend(detail)
             }
             if !pendingCleanupWasPersisted {
                 if targetMode == .off {
@@ -399,6 +409,19 @@ public final class ModeController: ModeControlling {
             screenLockState = .unchecked(reason: error.localizedDescription)
         }
 
+        let batteryProtectionStatus: BatteryProtectionStatus
+        do {
+            batteryProtectionStatus = try currentBatteryProtectionStatus(
+                allowInspection: installed && supported,
+                deadline: makeDeadline()
+            )
+        } catch {
+            batteryProtectionStatus = BatteryProtectionStatus(
+                requirement: batteryProtectionRequirement.batteryProtectionRequirement,
+                configuration: nil
+            )
+        }
+
         return SetupReport(
             amphetamineInstalled: installed,
             supportedVersion: supported,
@@ -407,6 +430,7 @@ public final class ModeController: ModeControlling {
             triggers: triggers,
             screenLock: screenLockState,
             powerProtect: powerProtect.inspect(),
+            batteryProtection: batteryProtectionStatus,
             developerDiagnosticPassed: store.closedDisplayReadinessPassed,
             developerDiagnosticIsActive: developerDiagnosticIsActive,
             amphetamineSessionIsActive: sessionIsActive
@@ -455,6 +479,7 @@ public final class ModeController: ModeControlling {
             durationMinutes: 1,
             expiresAt: clock.now.addingTimeInterval(60)
         )
+        try requireBatteryProtection(for: targetMode, deadline: deadline)
         var fallbackSignature: OwnedSessionSignature?
         do {
             try amphetamine.startTimedSession(
@@ -688,6 +713,7 @@ public final class ModeController: ModeControlling {
         }
 
         if mode.requiresDisplaySleep {
+            try requireBatteryProtection(for: mode, deadline: deadline)
             guard powerProtect.inspect().isReady else {
                 throw ModeControlError.powerProtectMissing
             }
@@ -703,6 +729,40 @@ public final class ModeController: ModeControlling {
             }
         }
         return state
+    }
+
+    private func currentBatteryProtectionStatus(
+        allowInspection: Bool = true,
+        deadline: OperationDeadline
+    ) throws -> BatteryProtectionStatus {
+        let requirement = batteryProtectionRequirement.batteryProtectionRequirement
+        guard allowInspection else {
+            return BatteryProtectionStatus(requirement: requirement, configuration: nil)
+        }
+        guard requirement.isRequired else {
+            return BatteryProtectionStatus(
+                requirement: batteryProtectionRequirement.batteryProtectionRequirement,
+                configuration: nil
+            )
+        }
+        let configuration = try batteryProtection.inspect(
+            timeout: try remainingTime(deadline)
+        )
+        try checkDeadline(deadline)
+        return BatteryProtectionStatus(
+            requirement: batteryProtectionRequirement.batteryProtectionRequirement,
+            configuration: configuration
+        )
+    }
+
+    private func requireBatteryProtection(
+        for mode: OperatingMode,
+        deadline: OperationDeadline
+    ) throws {
+        guard mode.requiresDisplaySleep else { return }
+        guard try currentBatteryProtectionStatus(deadline: deadline).isReady else {
+            throw ModeControlError.batteryProtectionNotConfigured(mode)
+        }
     }
 
     private func prepareInactiveClosedDisplayDefault(

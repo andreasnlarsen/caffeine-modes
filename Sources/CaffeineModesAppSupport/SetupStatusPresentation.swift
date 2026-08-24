@@ -13,6 +13,7 @@ public enum SetupRowAction: Equatable, Sendable {
     case disableTriggers
     case openLockScreenSettings
     case getPowerProtect
+    case openAmphetamine
 
     public var title: String {
         switch self {
@@ -22,6 +23,7 @@ public enum SetupRowAction: Equatable, Sendable {
         case .disableTriggers: "Turn Off Triggers"
         case .openLockScreenSettings: "Open Settings"
         case .getPowerProtect: "Get Power Protect"
+        case .openAmphetamine: "Open Amphetamine"
         }
     }
 }
@@ -58,7 +60,8 @@ public struct DeveloperDiagnosticAvailability: Equatable, Sendable {
               report.supportedVersion,
               report.automation == .passed,
               report.triggers == .passed,
-              !report.powerProtect.isRequired || report.powerProtect.isInstalled
+              !report.powerProtect.isRequired || report.powerProtect.isInstalled,
+              report.batteryProtection.isReady
         else {
             return DeveloperDiagnosticAvailability(
                 isEnabled: false,
@@ -89,11 +92,12 @@ public struct SetupStatusPresentation: Equatable, Sendable {
     public let triggers: SetupRowPresentation
     public let screenLock: SetupRowPresentation
     public let powerProtect: SetupRowPresentation
+    public let batteryProtection: SetupRowPresentation
     public let summary: String
     public let isComplete: Bool
 
     public var rows: [SetupRowPresentation] {
-        [amphetamine, automation, triggers, screenLock, powerProtect]
+        [amphetamine, automation, triggers, screenLock, powerProtect, batteryProtection]
     }
 
     public static let checking = SetupStatusPresentation(
@@ -102,6 +106,11 @@ public struct SetupStatusPresentation: Equatable, Sendable {
         triggers: row(title: RowTitle.triggers, indicator: .notChecked, detail: checkingDetail),
         screenLock: row(title: RowTitle.screenLock, indicator: .notChecked, detail: checkingDetail),
         powerProtect: row(title: RowTitle.powerProtect, indicator: .notChecked, detail: checkingDetail),
+        batteryProtection: row(
+            title: RowTitle.batteryProtection,
+            indicator: .notChecked,
+            detail: checkingDetail
+        ),
         summary: "Checking…",
         isComplete: false
     )
@@ -115,7 +124,8 @@ public struct SetupStatusPresentation: Equatable, Sendable {
             automationRow(report: report),
             triggersRow(report: report, actionFailure: triggersActionFailure),
             screenLockRow(report: report),
-            powerProtectRow(report: report)
+            powerProtectRow(report: report),
+            batteryProtectionRow(report: report)
         ]
         return SetupStatusPresentation(
             amphetamine: rows[0],
@@ -123,6 +133,7 @@ public struct SetupStatusPresentation: Equatable, Sendable {
             triggers: rows[2],
             screenLock: rows[3],
             powerProtect: rows[4],
+            batteryProtection: rows[5],
             summary: report.isReady ? "Ready" : "Setup needs attention",
             isComplete: report.isReady
         )
@@ -134,6 +145,7 @@ public struct SetupStatusPresentation: Equatable, Sendable {
         static let triggers = "Amphetamine Triggers off"
         static let screenLock = "Lock immediately"
         static let powerProtect = "Amphetamine Power Protect"
+        static let batteryProtection = "Amphetamine battery protection"
     }
 
     private static let checkingDetail = "Checking…"
@@ -268,6 +280,52 @@ public struct SetupStatusPresentation: Equatable, Sendable {
             indicator: .complete,
             detail: "Power Protect is installed."
         )
+    }
+
+    private static func batteryProtectionRow(report: SetupReport) -> SetupRowPresentation {
+        guard report.amphetamineInstalled else {
+            return row(
+                title: RowTitle.batteryProtection,
+                indicator: .notChecked,
+                detail: "Install Amphetamine first."
+            )
+        }
+        guard report.supportedVersion else {
+            return row(
+                title: RowTitle.batteryProtection,
+                indicator: .notChecked,
+                detail: "Update Amphetamine first."
+            )
+        }
+        let status = report.batteryProtection
+        switch status.observation {
+        case .matches:
+            return row(
+                title: RowTitle.batteryProtection,
+                indicator: .complete,
+                detail: "Amphetamine ends sessions at \(status.requirement.thresholdPercent)% on battery."
+            )
+        case .mismatch:
+            return row(
+                title: RowTitle.batteryProtection,
+                indicator: .needsAction,
+                detail: "In Session Defaults: end at \(status.requirement.thresholdPercent)%, no prompt, ignore on power.",
+                action: .openAmphetamine
+            )
+        case .unavailable:
+            return row(
+                title: RowTitle.batteryProtection,
+                indicator: .needsAction,
+                detail: "Caffeine Modes cannot read Amphetamine’s Session Defaults.",
+                action: .openAmphetamine
+            )
+        case .notRequired:
+            return row(
+                title: RowTitle.batteryProtection,
+                indicator: .notChecked,
+                detail: "Not required. Change this in General."
+            )
+        }
     }
 
     private static func row(

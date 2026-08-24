@@ -45,6 +45,104 @@ public enum PostUnlockMode: String, Equatable, Codable, Sendable {
     case work
 }
 
+public struct BatteryProtectionRequirement: Equatable, Codable, Sendable {
+    public static let allowedPercentages = [5, 10, 15, 20, 25, 30]
+    public static let defaultThresholdPercent = 15
+    public static let defaultValue = BatteryProtectionRequirement(
+        isRequired: true,
+        thresholdPercent: defaultThresholdPercent
+    )
+
+    public var isRequired: Bool
+    public var thresholdPercent: Int
+
+    public init(isRequired: Bool, thresholdPercent: Int) {
+        self.isRequired = isRequired
+        self.thresholdPercent = Self.allowedPercentages.contains(thresholdPercent)
+            ? thresholdPercent
+            : Self.defaultThresholdPercent
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isRequired
+        case thresholdPercent
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            isRequired: try container.decode(Bool.self, forKey: .isRequired),
+            thresholdPercent: try container.decode(Int.self, forKey: .thresholdPercent)
+        )
+    }
+}
+
+public struct AmphetamineBatteryProtectionConfiguration: Equatable, Sendable {
+    public var endsSessionOnLowBattery: Bool
+    public var thresholdPercent: Int
+    public var promptsBeforeEnding: Bool
+    public var ignoresLimitOnExternalPower: Bool
+
+    public init(
+        endsSessionOnLowBattery: Bool,
+        thresholdPercent: Int,
+        promptsBeforeEnding: Bool,
+        ignoresLimitOnExternalPower: Bool
+    ) {
+        self.endsSessionOnLowBattery = endsSessionOnLowBattery
+        self.thresholdPercent = thresholdPercent
+        self.promptsBeforeEnding = promptsBeforeEnding
+        self.ignoresLimitOnExternalPower = ignoresLimitOnExternalPower
+    }
+}
+
+public enum BatteryProtectionObservation: Equatable, Sendable {
+    case matches
+    case mismatch
+    case unavailable
+    case notRequired
+}
+
+public struct BatteryProtectionStatus: Equatable, Sendable {
+    public static let readyDefault = BatteryProtectionStatus(
+        requirement: .defaultValue,
+        configuration: AmphetamineBatteryProtectionConfiguration(
+            endsSessionOnLowBattery: true,
+            thresholdPercent: BatteryProtectionRequirement.defaultThresholdPercent,
+            promptsBeforeEnding: false,
+            ignoresLimitOnExternalPower: true
+        )
+    )
+
+    public var requirement: BatteryProtectionRequirement
+    public var observation: BatteryProtectionObservation
+
+    public init(
+        requirement: BatteryProtectionRequirement,
+        configuration: AmphetamineBatteryProtectionConfiguration?
+    ) {
+        self.requirement = requirement
+        guard requirement.isRequired else {
+            self.observation = .notRequired
+            return
+        }
+        guard let configuration else {
+            self.observation = .unavailable
+            return
+        }
+        self.observation = configuration.endsSessionOnLowBattery
+            && configuration.thresholdPercent == requirement.thresholdPercent
+            && !configuration.promptsBeforeEnding
+            && configuration.ignoresLimitOnExternalPower
+            ? .matches
+            : .mismatch
+    }
+
+    public var isReady: Bool {
+        observation == .matches || observation == .notRequired
+    }
+}
+
 public enum LidState: Equatable, Sendable {
     case open
     case closed
@@ -282,6 +380,7 @@ public struct SetupReport: Equatable, Sendable {
     public var triggers: SetupCheckState
     public var screenLock: SetupCheckState
     public var powerProtect: PowerProtectStatus
+    public var batteryProtection: BatteryProtectionStatus
     public var developerDiagnosticPassed: Bool
     public var developerDiagnosticIsActive: Bool
     public var amphetamineSessionIsActive: Bool?
@@ -294,6 +393,7 @@ public struct SetupReport: Equatable, Sendable {
         triggers: SetupCheckState,
         screenLock: SetupCheckState,
         powerProtect: PowerProtectStatus,
+        batteryProtection: BatteryProtectionStatus = .readyDefault,
         developerDiagnosticPassed: Bool,
         developerDiagnosticIsActive: Bool = false,
         amphetamineSessionIsActive: Bool? = nil
@@ -305,6 +405,7 @@ public struct SetupReport: Equatable, Sendable {
         self.triggers = triggers
         self.screenLock = screenLock
         self.powerProtect = powerProtect
+        self.batteryProtection = batteryProtection
         self.developerDiagnosticPassed = developerDiagnosticPassed
         self.developerDiagnosticIsActive = developerDiagnosticIsActive
         self.amphetamineSessionIsActive = amphetamineSessionIsActive
@@ -317,6 +418,7 @@ public struct SetupReport: Equatable, Sendable {
             && triggers == .passed
             && screenLock == .passed
             && powerProtect.isReady
+            && batteryProtection.isReady
     }
 }
 
@@ -327,6 +429,7 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
     case triggersEnabled
     case screenLockNotImmediate
     case powerProtectMissing
+    case batteryProtectionNotConfigured(OperatingMode)
     case openLidBeforeReplacingClosedDisplaySession(
         from: OperatingMode,
         to: OperatingMode
@@ -354,6 +457,8 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
             "Set Require password after screen saver begins or display is turned off to Immediately."
         case .powerProtectMissing:
             "Install Amphetamine Power Protect before you use Night or Travel."
+        case let .batteryProtectionNotConfigured(mode):
+            "Amphetamine cannot protect \(mode.displayName) at low battery. Open Setup to fix it."
         case let .openLidBeforeReplacingClosedDisplaySession(sourceMode, targetMode):
             "\(sourceMode.closedDisplaySessionHolderName) is keeping this closed Mac awake. Open the lid before you start \(targetMode.displayName)."
         case let .screenLockStateUnavailable(message):

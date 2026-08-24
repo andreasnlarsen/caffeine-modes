@@ -46,6 +46,10 @@ final class UserDefaultsModeStoreTests: XCTestCase {
         store.closedDisplayReadinessPassed = true
         store.launchAtLoginPromptWasShown = true
         store.postUnlockMode = .work
+        store.batteryProtectionRequirement = BatteryProtectionRequirement(
+            isRequired: false,
+            thresholdPercent: 25
+        )
 
         let reloaded = UserDefaultsModeStore(defaults: defaults)
         XCTAssertEqual(reloaded.lastRequestedMode, mode)
@@ -55,6 +59,10 @@ final class UserDefaultsModeStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.closedDisplayReadinessPassed)
         XCTAssertTrue(reloaded.launchAtLoginPromptWasShown)
         XCTAssertEqual(reloaded.postUnlockMode, .work)
+        XCTAssertEqual(
+            reloaded.batteryProtectionRequirement,
+            BatteryProtectionRequirement(isRequired: false, thresholdPercent: 25)
+        )
 
         reloaded.ownedSessionSignature = nil
         XCTAssertNil(store.ownedSessionSignature)
@@ -66,6 +74,35 @@ final class UserDefaultsModeStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         XCTAssertEqual(UserDefaultsModeStore(defaults: defaults).postUnlockMode, .off)
+    }
+
+    func testBatteryProtectionDefaultsRequiredAtFifteenPercent() {
+        let suiteName = "UserDefaultsModeStoreTests-battery-defaults-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(
+            UserDefaultsModeStore(defaults: defaults).batteryProtectionRequirement,
+            .defaultValue
+        )
+    }
+
+    func testInvalidStoredLowBatteryThresholdFallsBackToFifteenPercent() throws {
+        let suiteName = "UserDefaultsModeStoreTests-battery-invalid-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: [
+                "isRequired": false,
+                "thresholdPercent": 99
+            ]),
+            forKey: "batteryProtectionRequirement"
+        )
+
+        XCTAssertEqual(
+            UserDefaultsModeStore(defaults: defaults).batteryProtectionRequirement,
+            BatteryProtectionRequirement(isRequired: false, thresholdPercent: 15)
+        )
     }
 }
 

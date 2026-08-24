@@ -22,8 +22,10 @@ final class SetupAndVersionTests: XCTestCase {
         XCTAssertEqual(report.triggers, .unchecked(reason: nil))
         XCTAssertNil(report.amphetamineSessionIsActive)
         XCTAssertEqual(report.screenLock, .passed)
+        XCTAssertEqual(report.batteryProtection.observation, .unavailable)
         XCTAssertFalse(report.isReady)
         XCTAssertTrue(fixture.amphetamine.commands.isEmpty)
+        XCTAssertEqual(fixture.batteryProtection.callCount, 0)
     }
 
     func testUnsupportedVersionReportsWithoutAnAutomationRead() {
@@ -39,6 +41,21 @@ final class SetupAndVersionTests: XCTestCase {
         XCTAssertEqual(report.triggers, .unchecked(reason: nil))
         XCTAssertNil(report.amphetamineSessionIsActive)
         XCTAssertTrue(fixture.amphetamine.commands.isEmpty)
+        XCTAssertEqual(report.batteryProtection.observation, .unavailable)
+        XCTAssertEqual(fixture.batteryProtection.callCount, 0)
+    }
+
+    func testDisabledBatteryProtectionRequirementSkipsSetupPreferenceRead() {
+        let fixture = Fixture()
+        fixture.batteryProtectionRequirement.batteryProtectionRequirement = .init(
+            isRequired: false,
+            thresholdPercent: 15
+        )
+
+        let report = fixture.controller.setupReport()
+
+        XCTAssertEqual(report.batteryProtection.observation, .notRequired)
+        XCTAssertEqual(fixture.batteryProtection.callCount, 0)
     }
 
     func testOldAmphetamineIsRejectedBeforeMutation() {
@@ -232,6 +249,31 @@ final class SetupAndVersionTests: XCTestCase {
         XCTAssertEqual(snapshot.requestedMode, .custom)
         XCTAssertEqual(snapshot.health, .ready)
         XCTAssertTrue(snapshot.detail?.contains("ends automatically") == true)
+    }
+
+    func testClosedDisplayReadinessRechecksBatteryProtectionBeforeMutation() {
+        let fixture = Fixture()
+        fixture.batteryProtection.configuration = AmphetamineBatteryProtectionConfiguration(
+            endsSessionOnLowBattery: true,
+            thresholdPercent: 10,
+            promptsBeforeEnding: false,
+            ignoresLimitOnExternalPower: true
+        )
+
+        XCTAssertThrowsError(
+            try fixture.controller.runClosedDisplayReadinessTest(
+                authorizingSessionReplacement: true
+            )
+        ) { error in
+            guard case let .batteryProtectionNotConfigured(mode) = error as? ModeControlError,
+                  case let .travel(durationMinutes, _) = mode
+            else {
+                return XCTFail("Expected the diagnostic battery prerequisite to fail.")
+            }
+            XCTAssertEqual(durationMinutes, 1)
+        }
+        XCTAssertFalse(fixture.amphetamine.commands.contains(where: { $0.hasPrefix("start") }))
+        XCTAssertNil(fixture.store.ownedSessionSignature)
     }
 
     func testPassedDiagnosticDoesNotLabelAnotherActiveSessionAsDiagnostic() throws {

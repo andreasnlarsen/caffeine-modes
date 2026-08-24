@@ -654,3 +654,21 @@ public struct SetupCompletionCoordinator: Sendable {
         return true
     }
 }
+
+public struct SetupReportRefreshState: Sendable {
+    private var rerunAfterCurrentRefresh = false
+
+    public init() {}
+
+    public mutating func request(isBusy: Bool) -> Bool {
+        guard isBusy else { return true }
+        rerunAfterCurrentRefresh = true
+        return false
+    }
+
+    public mutating func finishCurrentRefresh() -> Bool {
+        let shouldRerun = rerunAfterCurrentRefresh
+        rerunAfterCurrentRefresh = false
+        return shouldRerun
+    }
+}

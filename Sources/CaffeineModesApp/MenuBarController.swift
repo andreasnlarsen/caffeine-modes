@@ -50,6 +50,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         controller: ModeControlling,
         assertions: PowerAssertionInspecting,
         store: ModeStateStoring,
+        batteryProtectionRequirement: BatteryProtectionRequirementStoring,
         launchManager: LaunchAtLoginManaging,
         requestQuit: @escaping () -> Void
     ) {
@@ -63,6 +64,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.settingsWindow = SettingsWindowController(
             controller: controller,
             store: store,
+            batteryProtectionRequirement: batteryProtectionRequirement,
             launchManager: launchManager
         )
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -71,6 +73,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self?.showLaunchAtLoginPromptIfNeeded()
         }
         settingsWindow.onWorkFinished = { [weak self] in
+            self?.refresh()
+        }
+        settingsWindow.onBatteryProtectionRequirementChanged = { [weak self] in
             self?.refresh()
         }
         configureMenu()

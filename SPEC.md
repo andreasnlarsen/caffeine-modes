@@ -2,9 +2,9 @@
 
 Status: Active implementation contract
 
-Version: 1.1.1
+Version: 1.1.2
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 ## 1. Goal
 
@@ -38,6 +38,7 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 - As a user, I can tell whether a process blocks display sleep, automatic system sleep, or disk idle sleep. These facts are never reduced to the phrase "Mac held awake."
 - As a user, Settings gives me General, Setup, and Modes tabs. A hidden Developer tab contains the optional one-minute diagnostic.
 - As a user, I can choose Off or Work as the suggested action after I unlock Night or Travel. Off is the default. I still confirm the change.
+- As a user, Night and Travel require Amphetamine battery protection by default at 15%. I can require 5, 10, 15, 20, 25, or 30%, or turn the requirement off. Caffeine Modes checks the setting before start. Amphetamine owns the cutoff.
 - As a user, Quit lets me end the active session or leave it running. If I choose to end it, the app stays open when Off cannot be verified.
 - As a user, logout, restart, and shutdown do not wait for a Caffeine Modes prompt or Amphetamine command.
 
@@ -46,11 +47,11 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 ### P0
 
 - REQ-001 — Repository and artifacts. Acceptance: The root contains one active `SPEC.md`, `DESIGN_SYSTEM.md`, `README.md`, SwiftPM core, app-support, app, and test targets, release scripts, and a git repository on `main`.
-- REQ-002 — Guided setup. Acceptance: Setup reports Amphetamine presence and version, Automation access, Trigger state, immediate screen-lock policy, and Power Protect availability as separate deterministic results. Every problem row includes its matching action. The Amphetamine read and screen-lock query each use an independent bounded deadline. No one-minute session blocks normal use. The optional Developer diagnostic expires through Amphetamine and never counts toward Setup readiness.
+- REQ-002 — Guided setup. Acceptance: Setup reports Amphetamine presence and version, Automation access, Trigger state, immediate screen-lock policy, Power Protect availability, and the required Amphetamine battery protection as separate deterministic results. Every problem row includes its matching action. The Amphetamine state read, battery-preference read, and screen-lock query each use an independent bounded deadline. No one-minute session blocks normal use. The optional Developer diagnostic expires through Amphetamine and never counts toward Setup readiness.
 - REQ-003 — Mode reconciliation. Acceptance: Off, Work, Night, Travel, and Custom are mutually exclusive projections of Amphetamine state plus one stored diagnostic session signature.
 - REQ-004 — Night transition and wake lifecycle. Acceptance: Night blocks named external display assertions before mutation, applies its Amphetamine policy, verifies that policy, and only then requests display sleep. A screen wake while still locked keeps Night active and causes one verified re-sleep request after 30 seconds. Each new screen-visibility event gets at most one bounded retry after another 30 seconds if that re-sleep fails. A verified unlock performs no Amphetamine mutation. It asks the user to confirm the saved Off or Work suggestion. Automatic-system-sleep and disk-idle assertions remain observational.
 - REQ-005 — Travel transition. Acceptance: Travel accepts only 30, 60, 90, or 120 minutes, stores its expiry, uses an Amphetamine timed session, follows the same wake and unlock lifecycle as Night, and reconciles to Off when its backend timer expires.
-- REQ-006 — Session and clamshell safety. Acceptance: A stored signature never authorizes a destructive user action. Every manual Work, Night, or Travel start and active-session replacement needs an explicit user choice. An unlock signal is read-only. The saved post-unlock setting selects which confirmation appears first, but it never authorizes a mutation. A new active mode starts only after any replaced session is ended and Off is verified. Work never disables closed-display mode after its session starts. Work normalizes an inactive closed-display default to normal macOS lid behavior without a clamshell check, because no session is keeping a closed Mac awake; the normalized Amphetamine default also applies to later manual Amphetamine sessions. Before Work, Night, or Travel replaces an active closed-display session, the app requires an open lid or a closed lid with detected external power and an active external display. Normal macOS clamshell requirements still apply. The app checks the same facts again immediately before it ends the active session. If either check fails, the transition stops before mutation and its error names both the current session and the selected mode. Off remains available without this replacement check. Relaunch, partial failure, user Quit, and automatic lifecycle handling never silently mutate an unowned session.
+- REQ-006 — Session, battery, and clamshell safety. Acceptance: A stored signature never authorizes a destructive user action. Every manual Work, Night, or Travel start and active-session replacement needs an explicit user choice. An unlock signal is read-only. The saved post-unlock setting selects which confirmation appears first, but it never authorizes a mutation. Battery protection is required by default at 15%, with allowed values of 5, 10, 15, 20, 25, and 30%. Before Night or Travel starts, the controller requires a readable Amphetamine configuration with low-battery ending enabled, the exact selected percentage, no end prompt, and the limit ignored on external power. It checks the same configuration before it ends a replaced session and again immediately before the start command. A missing, malformed, changed, or mismatched configuration stops Night or Travel. Work and Off remain available. Amphetamine is the sole owner of low-battery session termination; Caffeine Modes never sends an unattended low-battery end command. A new active mode starts only after any replaced session is ended and Off is verified. Work never disables closed-display mode after its session starts. Work normalizes an inactive closed-display default to normal macOS lid behavior without a clamshell check, because no session is keeping a closed Mac awake; the normalized Amphetamine default also applies to later manual Amphetamine sessions. Before Work, Night, or Travel replaces an active closed-display session, the app requires an open lid or a closed lid with detected external power and an active external display. Normal macOS clamshell requirements still apply. The app checks the same facts again immediately before it ends the active session. If either check fails, the transition stops before mutation and its error names both the current session and the selected mode. Off remains available without this replacement check. Relaunch, partial failure, user Quit, and automatic lifecycle handling never silently mutate an unowned session.
 - REQ-007 — Native menu and Settings app. Acceptance: The `NSStatusItem` menu, template icon, Settings access, How Modes Work access, countdown, actual mode checkmark, and `SMAppService.mainApp` Launch at Login toggle reflect observed state. Settings uses General, Setup, and Modes toolbar tabs. Developer appears only when Settings opens with Option held. Off reports display and system-sleep blockers as distinct facts; disk-idle blockers appear only in the tooltip. Controller work runs on serial worker queues.
 - REQ-008 — Boundary limits. Acceptance: The repository contains no root helper, Accessibility request, direct Amphetamine preference edit, `osascript` process, `pmset disablesleep`, or unrelated external-process termination path.
 - REQ-009 — Release artifact. Acceptance: The DMG contains an arm64 and x86_64 app with hardened runtime, LEAD MEDIA AS Developer ID signing, accepted notarization, a staple ticket, and passing Gatekeeper assessment.
@@ -101,7 +102,7 @@ Scripts/verify-release.sh
 - NFR-007: No user data leaves the Mac. Version 1 makes no network request.
 - NFR-008: A timed child process reserves cleanup time inside its original deadline. Termination and kill cleanup cannot extend that deadline.
 - NFR-009: At most one IOKit assertion inspection can be in flight. A caller joins an existing inspection within its own deadline. If that inspection finishes in time, the joined caller then obtains a fresh snapshot within the same deadline.
-- NFR-010: Setup checks, status reads, and mode-transition orchestration execute on serial worker queues. The bounded `NSAppleScript` creation, execution, and reply parsing execute on the main thread because Apple marks that class main-thread-only. No AppleScript descriptor crosses the thread boundary. IOKit inspection, device-policy reads, and fixed process invocations remain off the main thread.
+- NFR-010: Setup checks, status reads, and mode-transition orchestration execute on serial worker queues. `ModeController` serializes all Amphetamine mutations through one lock. The bounded `NSAppleScript` creation, execution, and reply parsing execute on the main thread because Apple marks that class main-thread-only. No AppleScript descriptor crosses the thread boundary. IOKit inspection, device-policy reads, and local Amphetamine preference reads use bounded single-flight operations off the main thread. Fixed process invocations also remain off the main thread.
 - NFR-011: Screen lifecycle handling is event-driven. It has no idle polling loop. A screen-wake timer covers the 30-second locked-screen window. Each new screen-visibility event can add one 30-second timer after a failed re-sleep. That timer never repeats.
 
 ## 8. Constraints
@@ -125,6 +126,7 @@ Scripts/verify-release.sh
 | Login item | Use ServiceManagement | `SMAppService.mainApp` is the supported macOS API. |
 | Power assertion inspection | Use IOKit | It provides a read-only process-level source for blockers. |
 | Screen-lock policy | Read the local device grace period; use `sysadminctl` only as a pre-macOS-26 fallback | The product must match current Lock Screen settings and fail closed when the policy is not immediate. |
+| Low-battery session end | Use Amphetamine Session Defaults | One backend owns session termination, and the cutoff survives a Caffeine Modes crash. |
 | Updates | Manual DMG | A feed and update framework are deferred until distribution is proven. |
 | Analytics | Do not build or buy | Version 1 has no telemetry requirement. |
 
@@ -135,7 +137,7 @@ Scripts/verify-release.sh
 - `CaffeineModesCore` contains the domain, session-safety rules, transition sequence, and persistence interface. `CaffeineModesCoreTests` tests both core and app-support behavior.
 - `CaffeineModesAppSupport` contains testable setup, power-status, menu-selection, and application-termination presentation logic. It has no AppKit dependency.
 - `CaffeineModesApp` contains the AppKit UI and macOS adapters.
-- `AmphetamineControlling`, `PowerAssertionInspecting`, `ScreenLockPolicyChecking`, `ScreenLockStateInspecting`, `PowerProtectInspecting`, `ClamshellContextInspecting`, `DisplaySleeping`, and `ModeStateStoring` are narrow replaceable seams for verified external boundaries.
+- `AmphetamineControlling`, `PowerAssertionInspecting`, `ScreenLockPolicyChecking`, `ScreenLockStateInspecting`, `PowerProtectInspecting`, `ClamshellContextInspecting`, `AmphetamineBatteryProtectionInspecting`, `DisplaySleeping`, `ModeStateStoring`, and `BatteryProtectionRequirementStoring` are narrow replaceable seams for verified external boundaries.
 - The app does not add extension registries, backend factories, or alternate power logic in version 1.
 
 ### Domain vocabulary
@@ -152,7 +154,8 @@ Scripts/verify-release.sh
 
 - Canonical owner: `ModeController` is the only mutator of operating-mode transitions.
 - Amphetamine is the system of record for active power assertions.
-- `UserDefaultsModeStore` is the system of record for onboarding flags, post-unlock preference, last requested mode, Travel expiry, and the diagnostic session signature only.
+- Amphetamine Session Defaults are the system of record and sole mutator for the actual low-battery cutoff.
+- `UserDefaultsModeStore` is the system of record for onboarding flags, post-unlock preference, the battery-protection requirement, last requested mode, Travel expiry, and the diagnostic session signature only.
 - `LaunchAtLoginManager` is the one mutator for login-item registration.
 - No business rule has two owners.
 
@@ -165,6 +168,9 @@ Scripts/verify-release.sh
 | Display-sleep request | macOS | `ModeController` through `DisplaySleeping` after verification |
 | Launch at Login | `SMAppService.mainApp.status` | `LaunchAtLoginManager` |
 | Suggested post-unlock action | `ModeStateStoring` | Settings General tab |
+| Battery-protection requirement | `BatteryProtectionRequirementStoring` | Settings General tab |
+| Actual low-battery cutoff | Amphetamine Session Defaults | Amphetamine |
+| Battery-protection readiness | Read-only local Amphetamine preference projection | `ModeController` preflight and Setup |
 | Developer diagnostic flag | `ModeStateStoring` | Optional closed-lid diagnostic only |
 
 ### Changeability and replacement strategy
@@ -195,6 +201,7 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 | Off | User confirms optional Developer diagnostic | Custom with ready health | Verify Off, authorized one-minute start, enable closed-display mode, query, store diagnostic signature |
 | Developer diagnostic | Amphetamine timer expires | Off | Reconcile observes inactive and clears marker |
 | Travel | Amphetamine timer expires | Off | Reconcile observes inactive and clears marker |
+| Night, Travel, Work, or a manual non-Trigger session | Battery reaches the Amphetamine limit while using battery power | Off | Amphetamine ends the session from its Session Defaults; Caffeine Modes later reconciles the inactive state |
 | Projected active state | An observable policy or timer changes | Custom | Reconcile invalidates the projection |
 | Any active state | Quit and choose Turn Off and Quit | Off then terminate | End and verify; a failure cancels Quit |
 | Any active state | Quit and choose Leave Session Running | Active then terminate | Do not mutate Amphetamine |
@@ -221,13 +228,15 @@ Each system boundary is replaceable behind one protocol. A future standalone bac
 - The Developer diagnostic confirmation states that its timed start may replace an Amphetamine session that appears after the Off check.
 - Amphetamine 5.3.2 exposes policy and timer values but no stable session identifier. A stored signature is never destructive authority. Even a matching active state needs confirmation before it can be ended or replaced.
 - A relaunch reconstructs the projection from Amphetamine plus the stored signature.
+- The battery-protection requirement is checked during Night and Travel preflight, before a replaced session ends, and immediately before the start command. A configuration change before replacement leaves the current session running. A later change leaves the backend verified Off and never starts an unprotected away session.
+- Amphetamine applies its global non-Trigger battery setting after a session starts. Caffeine Modes does not monitor charge, race Amphetamine, or send a second unattended end command.
 
 ### Forbidden transitions
 
 - Custom cannot be selected as a command.
 - Work, Night, Travel, and the Developer diagnostic cannot start without explicit user authorization. No mode starts or ends automatically after unlock.
-- No active session can be ended or replaced without an explicit user confirmation.
-- Night or Travel cannot start with failed setup, missing required Power Protect, a non-immediate lock policy, or a named external display blocker.
+- No active session can be ended or replaced by Caffeine Modes without explicit user confirmation.
+- Night or Travel cannot start with failed setup, missing or mismatched required Amphetamine battery protection, missing required Power Protect, a non-immediate lock policy, or a named external display blocker.
 - Work, Night, and Travel cannot replace an active closed-display session unless the app detects an open lid or a closed lid with external power and an active external display. The same check runs again immediately before the active session ends. If either check fails, the user must open the lid first. Off is exempt because it intentionally restores normal sleep behavior.
 - Travel cannot be indefinite or use a duration outside 30, 60, 90, and 120 minutes.
 - Quit can leave an active session running. If the user chooses Turn Off and Quit, Quit cannot finish until Off is verified. If session inspection fails, Quit offers only a no-mutation leave-and-quit choice or Cancel.
@@ -241,6 +250,19 @@ OperatingMode
 
 PostUnlockMode
   off | work
+
+BatteryProtectionRequirement
+  isRequired: Bool = true
+  thresholdPercent: 5 | 10 | 15 | 20 | 25 | 30 = 15
+
+AmphetamineBatteryProtectionConfiguration
+  endsSessionOnLowBattery
+  thresholdPercent
+  promptsBeforeEnding
+  ignoresLimitOnExternalPower
+
+BatteryProtectionObservation
+  matches | mismatch | unavailable | notRequired
 
 ControlHealth
   ready | amphetamineMissing | unsupportedVersion | automationDenied
@@ -273,13 +295,14 @@ OwnedSessionSignature
   schemaVersion
 ```
 
-Only `OperatingMode`, `PostUnlockMode`, the diagnostic `OwnedSessionSignature`, and onboarding flags persist. `PostUnlockMode` defaults to Off and selects the suggested confirmed action after unlock. Observed state, health, and `requiresPostUnlockChoice` are live projections. A signature written by version 1.0.0 has no purpose or schema-version field and decodes as a legacy `activeMode`. A matching legacy Travel projection is re-anchored once to Amphetamine's observed remaining timer, then stored in the current format. The migration requires the expected Travel policy and a positive timer no longer than the selected duration. Despite its legacy type name, the signature does not prove identity or authorize an end command.
+Only `OperatingMode`, `PostUnlockMode`, `BatteryProtectionRequirement`, the diagnostic `OwnedSessionSignature`, and onboarding flags persist. `PostUnlockMode` defaults to Off and selects the suggested confirmed action after unlock. `BatteryProtectionRequirement` defaults to required at 15% and normalizes an invalid stored threshold to 15%. Observed Amphetamine battery configuration, observed Amphetamine state, health, and `requiresPostUnlockChoice` are live projections. A signature written by version 1.0.0 has no purpose or schema-version field and decodes as a legacy `activeMode`. A matching legacy Travel projection is re-anchored once to Amphetamine's observed remaining timer, then stored in the current format. The migration requires the expected Travel policy and a positive timer no longer than the selected duration. Despite its legacy type name, the signature does not prove identity or authorize a manual end command.
 
 ## 13. Integrations
 
 - Amphetamine: Local Apple Events by bundle ID. Minimum version is 5.3.2.
 - Amphetamine Power Protect: Detect Apple Silicon from the runtime host capability, including when the universal app runs through Rosetta. An unreadable capability fails closed and requires Power Protect. Then use read-only local presence checks for the two files documented by Amphetamine. Missing support blocks Night and Travel and links to the official installer project.
 - IOKit: Read-only `IOPMCopyAssertionsByProcess` inspection behind the shared transition deadline. Assertion types are classified as display sleep, automatic system sleep, or disk idle. Automatic system sleep includes network-client assertions used for active remote connections. Night and Travel consult only the display list. Off reports non-macOS process names for system and disk assertions and omits temporary macOS service assertions. Display assertions remain visible regardless of owner because they can block the requested screen sleep. One shared in-flight operation prevents worker accumulation after a timeout. A safety-critical caller that receives a joined operation's result then uses a new snapshot taken within the same deadline.
+- Amphetamine battery protection: Synchronize Amphetamine's container preference domain, then read the four known values in one snapshot. Strict type, range, presence, and synchronization checks fail closed. Never edit Amphetamine preferences. Amphetamine exposes no supported AppleScript command for these settings, so the Setup action opens Amphetamine and the user changes Session Defaults. When the requirement is enabled, Night and Travel need low-battery ending on at the exact percentage, prompt-before-ending off, and ignore-on-external-power on. Amphetamine owns the later cutoff for non-Trigger sessions.
 - Closed-display replacement context: Read the IOKit clamshell state before and after the power and display facts. Read the current IOKit power-source type and CoreGraphics built-in, active, and asleep display facts. A changed lid state, unknown power fact, or unknown display fact fails closed. The context never claims that it verifies every macOS clamshell requirement.
 - macOS screen-lock policy: Read-only local device-grace-period query through the Apple-signed MobileKeyBag framework. Zero seconds means immediate. Positive, negative, missing, or malformed values are not accepted as immediate. On macOS 26 and later, the app never trusts `sysadminctl` because its legacy output can disagree with Lock Screen settings. Earlier macOS versions may use bounded, fail-closed `sysadminctl -screenLock status` parsing only when the device-grace-period symbol is unavailable. The private read is acceptable for the Developer ID build but must be reassessed before any Mac App Store work.
 - macOS display sleep: Fixed `pmset displaysleepnow` process invocation.
@@ -314,6 +337,9 @@ MVP contains REQ-001 through REQ-009 only.
 | Display sleep does not lock due to policy | Screen contents remain visible | Require immediate policy and fail closed on unknown output. |
 | Travel runs in an enclosed bag | Heat can rise | Limit duration and show a permanent warning in About and README. |
 | Network changes during travel | A task can still lose connectivity | State this limitation; no network-continuity claim exists. |
+| Amphetamine battery preferences change or cannot be read | Night or Travel could start without the required cutoff | Synchronize and read one strict live preference snapshot during preflight and again immediately before start. Fail closed. Never edit Amphetamine preferences. |
+| Amphetamine's battery limit is global for non-Trigger sessions | Work or a manual Amphetamine session can also end at the selected charge | State the scope in Settings and README. Turning off the Caffeine Modes requirement never claims to disable Amphetamine. |
+| Caffeine Modes stops during Night or Travel | App-owned safeguards cannot run | Amphetamine remains the sole cutoff owner. Its timer and battery policy continue without Caffeine Modes. |
 | Signing certificate or notary profile is absent | REQ-009 cannot pass | The release scripts stop before packaging and name the missing prerequisite. |
 
 ## 17. Testing Strategy
@@ -321,7 +347,7 @@ MVP contains REQ-001 through REQ-009 only.
 - Framework: XCTest with fakes for every external boundary.
 - Mandate: Write P0 behavior tests before changing the core transition implementation.
 - Coverage: `CaffeineModesCore` line coverage must be at least 90%.
-- Unit scope: All 20 selectable source-to-target transitions, same-mode restart semantics, the complete clamshell fact truth table, safe and blocked closed-display replacement matrices, final pre-mutation context recheck, production power/display fact mapping, command order, safe inactive closed-display normalization, Power Protect checks, bounded and fresh blocker inspection, permission denial, missing and old Amphetamine, independent setup deadlines, Triggers, lock policy, invalid Travel durations, Travel countdown rounding, partial failures, optional Developer-diagnostic projection, Custom projection, legacy signature decoding and Travel timer migration, relaunch, expiry, screen wake, read-only unlock handling, identical replacement-session safety, post-unlock Off or Work confirmation, target-specific start and replacement confirmations, user-versus-system termination routing, explicit Quit choices, failed-inspection Quit choices, and Quit failure.
+- Unit scope: All 20 selectable source-to-target transitions, same-mode restart semantics, the complete clamshell fact truth table, safe and blocked closed-display replacement matrices, final pre-mutation context recheck, production power/display fact mapping, strict Amphetamine battery-preference parsing, allowed requirement values and persistence, default-required behavior, unavailable and mismatched battery configuration, requirement changes during inspection, final battery-configuration recheck, projection preservation after a pre-mutation inspection timeout, Developer-diagnostic battery recheck, Work exclusion, command order, safe inactive closed-display normalization, Power Protect checks, bounded and fresh blocker inspection, permission denial, missing and old Amphetamine, independent setup deadlines, Triggers, lock policy, invalid Travel durations, Travel countdown rounding, partial failures, optional Developer-diagnostic projection, Custom projection, legacy signature decoding and Travel timer migration, relaunch, expiry, screen wake, read-only unlock handling, identical replacement-session safety, post-unlock Off or Work confirmation, target-specific start and replacement confirmations, user-versus-system termination routing, explicit Quit choices, failed-inspection Quit choices, and Quit failure.
 - Static scope: Verify AppKit, IOKit, entitlements, allowed commands, and forbidden mechanisms across every executable project input, including test sources. PATH-resolved and absolute `osascript` calls are rejected. Direct `defaults` executable calls are rejected even when the executable and arguments span multiple lines. Forbidden power arguments are detected across line boundaries. External-process termination spellings are rejected. The only allowed matches are the app's own terminate request and the two exact signals used to stop the child process owned by the bounded runner.
 - Build scope: Build both architectures, create one app bundle, and verify the resulting Mach-O slices.
 - Release scope: Verify Developer ID signature, team ID, hardened runtime, Gatekeeper, notarization, and staple ticket.
