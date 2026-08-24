@@ -209,7 +209,7 @@ final class FakeBatteryProtectionInspector: AmphetamineBatteryProtectionInspecti
         endsSessionOnLowBattery: true,
         thresholdPercent: 15,
         promptsBeforeEnding: false,
-        ignoresLimitOnExternalPower: true
+        ignoresLimitOnExternalPower: false
     )
     var queuedConfigurations: [AmphetamineBatteryProtectionConfiguration?] = []
     var error: Error?

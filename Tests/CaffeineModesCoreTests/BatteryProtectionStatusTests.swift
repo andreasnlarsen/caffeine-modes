@@ -6,7 +6,7 @@ final class BatteryProtectionStatusTests: XCTestCase {
         endsSessionOnLowBattery: true,
         thresholdPercent: 15,
         promptsBeforeEnding: false,
-        ignoresLimitOnExternalPower: true
+        ignoresLimitOnExternalPower: false
     )
 
     func testRequiredProtectionMatchesOnlyTheCompleteSafeConfiguration() {
@@ -25,24 +25,18 @@ final class BatteryProtectionStatusTests: XCTestCase {
                 endsSessionOnLowBattery: false,
                 thresholdPercent: 15,
                 promptsBeforeEnding: false,
-                ignoresLimitOnExternalPower: true
+                ignoresLimitOnExternalPower: false
             ),
             AmphetamineBatteryProtectionConfiguration(
                 endsSessionOnLowBattery: true,
                 thresholdPercent: 10,
                 promptsBeforeEnding: false,
-                ignoresLimitOnExternalPower: true
+                ignoresLimitOnExternalPower: false
             ),
             AmphetamineBatteryProtectionConfiguration(
                 endsSessionOnLowBattery: true,
                 thresholdPercent: 15,
                 promptsBeforeEnding: true,
-                ignoresLimitOnExternalPower: true
-            ),
-            AmphetamineBatteryProtectionConfiguration(
-                endsSessionOnLowBattery: true,
-                thresholdPercent: 15,
-                promptsBeforeEnding: false,
                 ignoresLimitOnExternalPower: false
             )
         ]
@@ -54,6 +48,23 @@ final class BatteryProtectionStatusTests: XCTestCase {
             XCTAssertEqual(status.observation, .mismatch)
             XCTAssertFalse(status.isReady)
         }
+    }
+
+    func testExternalPowerBypassIsRejectedWhenOtherSettingsMatch() {
+        let configuration = AmphetamineBatteryProtectionConfiguration(
+            endsSessionOnLowBattery: true,
+            thresholdPercent: 15,
+            promptsBeforeEnding: false,
+            ignoresLimitOnExternalPower: true
+        )
+
+        let status = BatteryProtectionStatus(
+            requirement: .defaultValue,
+            configuration: configuration
+        )
+
+        XCTAssertEqual(status.observation, .mismatch)
+        XCTAssertFalse(status.isReady)
     }
 
     func testRequiredProtectionFailsClosedWhenConfigurationIsUnavailable() {

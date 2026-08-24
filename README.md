@@ -8,7 +8,7 @@ It gives you three policies:
 - Night turns off all connected displays and keeps the locked Mac working. After you unlock, choose Off or Work.
 - Travel does the same for 30, 60, 90, or 120 minutes. After you unlock, choose Off or Work. Amphetamine's timer still ends Travel.
 
-Battery protection is required by default at 15%. Night and Travel start only when Amphetamine is set to end sessions at 15% on battery power, without a prompt. Amphetamine owns the cutoff, so it still works if Caffeine Modes stops.
+Battery protection is required by default at 15%. Night and Travel start only when Amphetamine is set to end sessions at 15%, without a prompt or power-adapter exception. Amphetamine owns the cutoff, so it still works if Caffeine Modes stops.
 
 Starting Work turns off Amphetamine's closed-display mode, so the lid follows normal macOS behavior. That default stays off for sessions you start in Amphetamine yourself, until you enable it again in Amphetamine.
 
@@ -28,7 +28,7 @@ Night and Travel can create heat when the Mac is closed. Do not run a Mac in an 
 8. Disable Amphetamine Triggers.
 9. Set the macOS password requirement to Immediately.
 10. On Apple Silicon, install Amphetamine Power Protect if Setup asks for it.
-11. In Amphetamine > Settings > Session Defaults, enable `End session if charge (%) is below`, select 15%, turn off its prompt, and enable `Ignore charge (%) if power adapter is connected`.
+11. In Amphetamine > Settings > Session Defaults, enable `End session if charge (%) is below`, select 15%, turn off its prompt, and leave `Ignore charge (%) if power adapter is connected` off.
 12. Enable Launch at Login if you want Caffeine Modes to start with your Mac.
 
 Setup does not make you wait for a one-minute test. Night and Travel verify their required Amphetamine state when you start them. The optional one-minute diagnostic is in the hidden Developer tab. Hold Option while you open Settings to show it.
@@ -95,7 +95,7 @@ The default requirement is On at 15%. Before Night or Travel starts, Caffeine Mo
 - End the session on low battery is on.
 - The limit matches the selected percentage.
 - Prompt before ending is off.
-- Ignore the limit while external power is connected is on.
+- Ignore the limit while external power is connected is off.
 
 Night and Travel stop before they change Amphetamine when any value does not match or cannot be read. Work and Off remain available.
 
@@ -111,7 +111,7 @@ The Amphetamine setting is global for non-Trigger sessions. It can also end Work
 
 If the remaining display cable does not provide power, the Mac switches to battery. Night or Travel stays active. Amphetamine ends the session at its configured limit. Normal macOS sleep behavior then returns.
 
-If the remaining display cable also provides power, macOS still reports external power. Amphetamine ignores the limit because Setup requires `Ignore charge (%) if power adapter is connected`.
+If the remaining display cable provides enough power, the battery stays above the limit. If it provides too little power, the battery can still drain. Amphetamine ends the session at the configured limit because `Ignore charge (%) if power adapter is connected` stays off.
 
 ### What if one USB-C cable carries power and the display signal?
 
@@ -173,8 +173,8 @@ Scripts/check-release-prerequisites.sh
 Build, sign, package, notarize, staple, and verify:
 
 ```sh
-APP_VERSION=1.1.2 BUILD_NUMBER=6 Scripts/release.sh
-APP_VERSION=1.1.2 Scripts/verify-release.sh
+APP_VERSION=1.1.3 BUILD_NUMBER=7 Scripts/release.sh
+APP_VERSION=1.1.3 Scripts/verify-release.sh
 ```
 
 Release artifacts stay under `dist/` and are ignored by Git.

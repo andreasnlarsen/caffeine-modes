@@ -303,13 +303,13 @@ public struct SetupStatusPresentation: Equatable, Sendable {
             return row(
                 title: RowTitle.batteryProtection,
                 indicator: .complete,
-                detail: "Amphetamine ends sessions at \(status.requirement.thresholdPercent)% on battery."
+                detail: "Amphetamine ends sessions at \(status.requirement.thresholdPercent)%."
             )
         case .mismatch:
             return row(
                 title: RowTitle.batteryProtection,
                 indicator: .needsAction,
-                detail: "In Session Defaults: end at \(status.requirement.thresholdPercent)%, no prompt, ignore on power.",
+                detail: "In Session Defaults: end at \(status.requirement.thresholdPercent)%, no prompt, keep ‘Ignore charge’ off.",
                 action: .openAmphetamine
             )
         case .unavailable:

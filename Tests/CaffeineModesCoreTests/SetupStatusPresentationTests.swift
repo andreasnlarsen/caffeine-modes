@@ -144,7 +144,7 @@ final class SetupStatusPresentationTests: XCTestCase {
     func testBatteryProtectionReadyMismatchUnavailableAndDisabledStates() {
         let ready = SetupStatusPresentation.make(report: makeReport()).batteryProtection
         XCTAssertEqual(ready.indicator, .complete)
-        XCTAssertEqual(ready.detail, "Amphetamine ends sessions at 15% on battery.")
+        XCTAssertEqual(ready.detail, "Amphetamine ends sessions at 15%.")
         XCTAssertNil(ready.action)
 
         let mismatchStatus = BatteryProtectionStatus(
@@ -163,7 +163,7 @@ final class SetupStatusPresentationTests: XCTestCase {
         XCTAssertEqual(mismatch.action, .openAmphetamine)
         XCTAssertEqual(
             mismatch.detail,
-            "In Session Defaults: end at 15%, no prompt, ignore on power."
+            "In Session Defaults: end at 15%, no prompt, keep ‘Ignore charge’ off."
         )
 
         let unavailable = SetupStatusPresentation.make(

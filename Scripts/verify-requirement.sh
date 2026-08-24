@@ -138,6 +138,8 @@ case "$requirement" in
         rg -q 'testBatteryProtectionInspectionUsesRemainingTransitionDeadline' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testBatteryRequirementChangeDuringInspectionFailsClosedBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testRequiredProtectionMatchesOnlyTheCompleteSafeConfiguration' "$project_root/Tests/CaffeineModesCoreTests/BatteryProtectionStatusTests.swift"
+        rg -q 'testExternalPowerBypassIsRejectedWhenOtherSettingsMatch' "$project_root/Tests/CaffeineModesCoreTests/BatteryProtectionStatusTests.swift"
+        rg -q '&& !configuration.ignoresLimitOnExternalPower' "$project_root/Sources/CaffeineModesCore/Domain.swift"
         rg -q 'testFailsClosedForMissingMalformedOrOutOfRangeValues' "$project_root/Tests/CaffeineModesCoreTests/AmphetamineBatteryProtectionInspectorTests.swift"
         rg -q 'allowedPercentages = \[5, 10, 15, 20, 25, 30\]' "$project_root/Sources/CaffeineModesCore/Domain.swift"
         rg -Fq 'with timeout of \(timeoutLiteral) seconds' "$project_root/Sources/CaffeineModesApp/AmphetamineClient.swift"

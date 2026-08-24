@@ -110,7 +110,7 @@ public struct BatteryProtectionStatus: Equatable, Sendable {
             endsSessionOnLowBattery: true,
             thresholdPercent: BatteryProtectionRequirement.defaultThresholdPercent,
             promptsBeforeEnding: false,
-            ignoresLimitOnExternalPower: true
+            ignoresLimitOnExternalPower: false
         )
     )
 
@@ -133,7 +133,7 @@ public struct BatteryProtectionStatus: Equatable, Sendable {
         self.observation = configuration.endsSessionOnLowBattery
             && configuration.thresholdPercent == requirement.thresholdPercent
             && !configuration.promptsBeforeEnding
-            && configuration.ignoresLimitOnExternalPower
+            && !configuration.ignoresLimitOnExternalPower
             ? .matches
             : .mismatch
     }
