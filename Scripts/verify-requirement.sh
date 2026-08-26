@@ -61,9 +61,13 @@ case "$requirement" in
         run_tests 'ModeControllerTests|UserDefaultsModeStoreTests'
         ;;
     REQ-004)
-        rg -q 'testNightChecksPolicyAndBlockersBeforeMutation' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
-        rg -q 'testNightDoesNotBlockOnSystemOrDiskAssertions' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testNightDoesNotLetAnAssertionOverrideVerifiedDisplaySleep' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testNightKeepsOwnedSessionWhenDisplaysRemainVisible' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testDisplaySleepFailureReportsUnlockedNightBeforeDisplayState' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testDegradedNightResleepRequiresRetryWithoutCreatingAVisibleError' "$project_root/Tests/CaffeineModesCoreTests/MenuLifecycleSafetyTests.swift"
+        rg -q 'testRetryNightDisplaySleepPreservesSessionWhenDisplayStillVisible' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testClassifierSeparatesDisplaySystemAndDiskAssertions' "$project_root/Tests/CaffeineModesCoreTests/PowerStatusPresentationTests.swift"
+        rg -q 'testDisplayStateClassificationRequiresEveryOnlineDisplayToBeAsleep' "$project_root/Tests/CaffeineModesCoreTests/SystemDisplayStateInspectorTests.swift"
         rg -q 'testNightSleepsDisplayOnlyAfterAmphetamineVerification' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testJoinedCallerUsesFreshResultWithinOriginalDeadline' "$project_root/Tests/CaffeineModesCoreTests/FreshSingleFlightTests.swift"
         rg -q 'testWakeInNightChecksLockAndArmsThirtySecondResleep' "$project_root/Tests/CaffeineModesCoreTests/AwayModeWakeStateMachineTests.swift"
@@ -71,15 +75,23 @@ case "$requirement" in
         rg -q 'testLockStateErrorStaysVisibleUntilALifecycleCheckSucceeds' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
         rg -q 'testResleepFailureStaysVisibleUntilResleepSucceeds' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
         rg -q 'testLockedNightResleepsAfterFreshVerification' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testNightResleepRequestFailureStillReportsObservedSafety' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testUnlockRequiresExplicitChoiceAndDoesNotMutateNight' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testUnlockNeverEndsAnIdenticalReplacementSession' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
-        run_tests 'ModeControllerTests|AwayModeWakeStateMachineTests|FreshSingleFlightTests|PowerStatusPresentationTests|ApplicationCoordinatorTests/test(LockStateErrorStaysVisibleUntilALifecycleCheckSucceeds|ResleepFailureStaysVisibleUntilResleepSucceeds)'
+        run_tests 'ModeControllerTests|AwayModeWakeStateMachineTests|FreshSingleFlightTests|PowerStatusPresentationTests|SystemDisplayStateInspectorTests|MenuLifecycleSafetyTests/test(DegradedNightResleepRequiresRetryWithoutCreatingAVisibleError|VerifiedUnlockDoesNotScheduleANightResleepRetry)|ApplicationCoordinatorTests/test(LockStateErrorStaysVisibleUntilALifecycleCheckSucceeds|ResleepFailureStaysVisibleUntilResleepSucceeds)'
         ;;
     REQ-005)
         rg -q 'allowedTravelDurations = \[30, 60, 90, 120\]' "$project_root/Sources/CaffeineModesCore/Domain.swift"
         rg -q 'testTravelExpiryReconcilesToOffWhenAmphetamineExpires' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
         rg -q 'testPostUnlockWorkPreferenceStillRequiresExplicitChoice' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
-        run_tests 'ModeControllerTests|TravelCountdownFormatterTests'
+        rg -q 'testTravelStartsDespiteDisplayAssertionAndKeepsTimerPrimary' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testTravelKeepsOwnedTimedSessionWhenLockDoesNotEngage' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testRetryTravelLockPreservesSessionAndClearsDegradedState' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testTravelNeverResleepsAfterStart' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
+        rg -q 'testTravelNeverArmsDisplayResleepAfterWakeOrDisplayReconnect' "$project_root/Tests/CaffeineModesCoreTests/AwayModeWakeStateMachineTests.swift"
+        rg -q 'testTravelAssertionWarningNamesRequestWithoutCallingItTheCause' "$project_root/Tests/CaffeineModesCoreTests/ApplicationCoordinatorTests.swift"
+        rg -q 'testTravelSelectionCanReadAFreshAssertionSnapshot' "$project_root/Tests/CaffeineModesCoreTests/MenuLifecycleSafetyTests.swift"
+        run_tests 'ModeControllerTests|AwayModeWakeStateMachineTests|TravelCountdownFormatterTests|MenuLifecycleSafetyTests/testTravelSelectionCanReadAFreshAssertionSnapshot|ApplicationCoordinatorTests/testTravelAssertionWarningNamesRequestWithoutCallingItTheCause'
         ;;
     REQ-006)
         rg -q 'testQuitInspectionReportsActiveWithoutEndingIt' "$project_root/Tests/CaffeineModesCoreTests/ModeControllerTests.swift"
@@ -155,7 +167,15 @@ case "$requirement" in
         rg -Fq 'Open + external' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
         rg -Fq 'Require battery protection for Night and Travel at:' "$project_root/Sources/CaffeineModesApp/SetupWindowController.swift"
         rg -q 'testGeneralBatteryProtectionRequirementDefaultsAndToggle' "$project_root/Tests/CaffeineModesCoreTests/SettingsPaneRenderTests.swift"
-        run_tests 'PowerStatusPresentationTests|SetupStatusPresentationTests|UserDefaultsModeStoreTests'
+        rg -q 'testTravelLockFailureKeepsTimerAndShowsRecoveryState' "$project_root/Tests/CaffeineModesCoreTests/PowerStatusPresentationTests.swift"
+        rg -q 'testNightLockFailureUsesAccurateAccessibilityDescription' "$project_root/Tests/CaffeineModesCoreTests/PowerStatusPresentationTests.swift"
+        rg -q 'testEveryModeGridCellNamesItsModeAndSetupForVoiceOver' "$project_root/Tests/CaffeineModesCoreTests/CustomerFacingCopyTests.swift"
+        rg -q 'testAboutContainsThePermanentHeatWarning' "$project_root/Tests/CaffeineModesCoreTests/CustomerFacingCopyTests.swift"
+        rg -Fq 'Retry Display Sleep' "$project_root/Sources/CaffeineModesAppSupport/PowerStatusPresentation.swift"
+        rg -Fq 'Try Lock Again' "$project_root/Sources/CaffeineModesAppSupport/PowerStatusPresentation.swift"
+        rg -Fq 'Turn Off Night' "$project_root/Sources/CaffeineModesAppSupport/PowerStatusPresentation.swift"
+        rg -Fq 'Turn Off Travel' "$project_root/Sources/CaffeineModesAppSupport/PowerStatusPresentation.swift"
+        run_tests 'PowerStatusPresentationTests|SetupStatusPresentationTests|UserDefaultsModeStoreTests|CustomerFacingCopyTests|SettingsPaneRenderTests/testGeneralBatteryProtectionRequirementDefaultsAndToggle'
         "$project_root/Scripts/verify-app.sh" >/dev/null 2>&1
         ;;
     REQ-008)

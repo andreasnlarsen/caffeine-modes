@@ -663,7 +663,13 @@ private final class RenderStubModeController: ModeControlling {
     func handleScreenUnlocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
         fatalError("not used while rendering")
     }
-    func resleepAwayModeIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+    func resleepNightIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        fatalError("not used while rendering")
+    }
+    func retryNightDisplaySleep(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        fatalError("not used while rendering")
+    }
+    func retryTravelLock(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
         fatalError("not used while rendering")
     }
     func hasActiveSessionForQuit() throws -> Bool { fatalError("not used while rendering") }
@@ -723,7 +729,13 @@ private final class SequencedReportModeController: ModeControlling {
     func handleScreenUnlocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
         fatalError("not used")
     }
-    func resleepAwayModeIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+    func resleepNightIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        fatalError("not used")
+    }
+    func retryNightDisplaySleep(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        fatalError("not used")
+    }
+    func retryTravelLock(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
         fatalError("not used")
     }
     func hasActiveSessionForQuit() throws -> Bool { fatalError("not used") }

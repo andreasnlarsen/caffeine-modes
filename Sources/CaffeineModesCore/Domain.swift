@@ -32,10 +32,87 @@ public enum OperatingMode: Equatable, Codable, Sendable {
 
     public static let allowedTravelDurations = [30, 60, 90, 120]
 
-    public var isAwayMode: Bool {
+    public var isAwayMode: Bool { policy.observesUnlock }
+}
+
+public enum ModeDisplayBehavior: Equatable, Sendable {
+    case followMacOS
+    case keepAwake
+    case forceSleepAndMaintain
+    case allowSleep
+}
+
+public struct OperatingModePolicy: Equatable, Sendable {
+    public var displayBehavior: ModeDisplayBehavior
+    public var usesClosedDisplayMode: Bool
+    public var requiresImmediateLockPolicy: Bool
+    public var requiresLockVerification: Bool
+    public var requiresBatteryProtection: Bool
+    public var observesUnlock: Bool
+    public var resleepsAfterDisplayWake: Bool
+
+    public init(
+        displayBehavior: ModeDisplayBehavior,
+        usesClosedDisplayMode: Bool,
+        requiresImmediateLockPolicy: Bool,
+        requiresLockVerification: Bool,
+        requiresBatteryProtection: Bool,
+        observesUnlock: Bool,
+        resleepsAfterDisplayWake: Bool
+    ) {
+        self.displayBehavior = displayBehavior
+        self.usesClosedDisplayMode = usesClosedDisplayMode
+        self.requiresImmediateLockPolicy = requiresImmediateLockPolicy
+        self.requiresLockVerification = requiresLockVerification
+        self.requiresBatteryProtection = requiresBatteryProtection
+        self.observesUnlock = observesUnlock
+        self.resleepsAfterDisplayWake = resleepsAfterDisplayWake
+    }
+}
+
+public extension OperatingMode {
+    var policy: OperatingModePolicy {
         switch self {
-        case .night, .travel: true
-        case .off, .work, .custom: false
+        case .off, .custom:
+            OperatingModePolicy(
+                displayBehavior: .followMacOS,
+                usesClosedDisplayMode: false,
+                requiresImmediateLockPolicy: false,
+                requiresLockVerification: false,
+                requiresBatteryProtection: false,
+                observesUnlock: false,
+                resleepsAfterDisplayWake: false
+            )
+        case .work:
+            OperatingModePolicy(
+                displayBehavior: .keepAwake,
+                usesClosedDisplayMode: false,
+                requiresImmediateLockPolicy: false,
+                requiresLockVerification: false,
+                requiresBatteryProtection: false,
+                observesUnlock: false,
+                resleepsAfterDisplayWake: false
+            )
+        case .night:
+            OperatingModePolicy(
+                displayBehavior: .forceSleepAndMaintain,
+                usesClosedDisplayMode: true,
+                requiresImmediateLockPolicy: true,
+                requiresLockVerification: true,
+                requiresBatteryProtection: true,
+                observesUnlock: true,
+                resleepsAfterDisplayWake: true
+            )
+        case .travel:
+            OperatingModePolicy(
+                displayBehavior: .allowSleep,
+                usesClosedDisplayMode: true,
+                requiresImmediateLockPolicy: true,
+                requiresLockVerification: true,
+                requiresBatteryProtection: true,
+                observesUnlock: true,
+                resleepsAfterDisplayWake: false
+            )
         }
     }
 }
@@ -186,6 +263,22 @@ public enum ControlHealth: String, Equatable, Codable, Sendable {
     case backendMismatch
 }
 
+public enum DisplayStateObservation: Equatable, Sendable {
+    case allAsleep
+    case visible
+    case unavailable
+}
+
+public enum ModeSafety: Equatable, Sendable {
+    case ready
+    case nightDisplaysVisible
+    case nightDisplayStateUnavailable
+    case nightUnlocked
+    case nightLockStateUnavailable
+    case travelUnlocked
+    case travelLockStateUnavailable
+}
+
 public struct AmphetamineState: Equatable, Codable, Sendable {
     public var sessionIsActive: Bool
     public var displaySleepAllowed: Bool
@@ -289,6 +382,7 @@ public struct ModeSnapshot: Equatable, Sendable {
     public var observedState: AmphetamineState?
     public var ownershipMarker: OwnedSessionSignature?
     public var health: ControlHealth
+    public var safety: ModeSafety
     public var blockingProcesses: [String]
     public var detail: String?
     public var requiresPostUnlockChoice: Bool
@@ -298,6 +392,7 @@ public struct ModeSnapshot: Equatable, Sendable {
         observedState: AmphetamineState?,
         ownershipMarker: OwnedSessionSignature?,
         health: ControlHealth,
+        safety: ModeSafety = .ready,
         blockingProcesses: [String] = [],
         detail: String? = nil,
         requiresPostUnlockChoice: Bool = false
@@ -306,6 +401,7 @@ public struct ModeSnapshot: Equatable, Sendable {
         self.observedState = observedState
         self.ownershipMarker = ownershipMarker
         self.health = health
+        self.safety = safety
         self.blockingProcesses = blockingProcesses
         self.detail = detail
         self.requiresPostUnlockChoice = requiresPostUnlockChoice
@@ -435,7 +531,6 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
         to: OperatingMode
     )
     case screenLockStateUnavailable(String)
-    case displaySleepBlocked([String])
     case activeSessionRequiresConfirmation
     case sessionStartRequiresConfirmation
     case invalidTravelDuration(Int)
@@ -463,8 +558,6 @@ public enum ModeControlError: Error, Equatable, LocalizedError, Sendable {
             "\(sourceMode.closedDisplaySessionHolderName) is keeping this closed Mac awake. Open the lid before you start \(targetMode.displayName)."
         case let .screenLockStateUnavailable(message):
             message
-        case let .displaySleepBlocked(processes):
-            "Display sleep is blocked by: \(processes.joined(separator: ", "))."
         case .activeSessionRequiresConfirmation:
             "Amphetamine has an active session. Confirm before Caffeine Modes ends or replaces it."
         case .sessionStartRequiresConfirmation:

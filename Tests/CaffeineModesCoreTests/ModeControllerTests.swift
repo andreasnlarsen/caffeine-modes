@@ -874,15 +874,66 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertFalse(fixture.amphetamine.inactiveClosedDisplayDefaultEnabled)
     }
 
-    func testNightChecksPolicyAndBlockersBeforeMutation() {
+    func testNightDoesNotLetAnAssertionOverrideVerifiedDisplaySleep() throws {
         let fixture = Fixture()
         fixture.assertions.blockers = ["Raycast"]
 
-        XCTAssertThrowsError(try fixture.controller.transition(to: .night, replacingActiveSession: true)) { error in
-            XCTAssertEqual(error as? ModeControlError, .displaySleepBlocked(["Raycast"]))
-        }
-        XCTAssertFalse(fixture.amphetamine.commands.contains(where: { $0.hasPrefix("start") }))
-        XCTAssertEqual(fixture.display.sleepCount, 0)
+        let snapshot = try fixture.controller.transition(
+            to: .night,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .night)
+        XCTAssertEqual(snapshot.safety, .ready)
+        XCTAssertEqual(fixture.display.sleepCount, 1)
+        XCTAssertEqual(fixture.assertions.callCount, 0)
+    }
+
+    func testTravelStartsDespiteDisplayAssertionAndKeepsTimerPrimary() throws {
+        let fixture = Fixture()
+        fixture.assertions.blockers = ["Polytopia"]
+
+        let snapshot = try fixture.controller.transition(
+            to: .travel(durationMinutes: 90, expiresAt: .distantPast),
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 90)
+        XCTAssertEqual(snapshot.safety, .ready)
+        XCTAssertEqual(fixture.display.sleepCount, 1, "Travel may black the display once to activate the lock.")
+        XCTAssertEqual(fixture.assertions.callCount, 0)
+    }
+
+    func testNightKeepsOwnedSessionWhenDisplaysRemainVisible() throws {
+        let fixture = Fixture()
+        fixture.displayState.observation = .visible
+
+        let snapshot = try fixture.controller.transition(
+            to: .night,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .night)
+        XCTAssertEqual(snapshot.safety, .nightDisplaysVisible)
+        XCTAssertEqual(snapshot.ownershipMarker?.purpose, .activeMode)
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertEqual(fixture.store.lastRequestedMode, .night)
+    }
+
+    func testTravelKeepsOwnedTimedSessionWhenLockDoesNotEngage() throws {
+        let fixture = Fixture()
+        fixture.screenLockState.isLocked = false
+
+        let snapshot = try fixture.controller.transition(
+            to: .travel(durationMinutes: 90, expiresAt: .distantPast),
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 90)
+        XCTAssertEqual(snapshot.safety, .travelUnlocked)
+        XCTAssertEqual(snapshot.ownershipMarker?.purpose, .activeMode)
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertEqual(fixture.store.lastRequestedMode.travelDurationMinutes, 90)
     }
 
     func testNightDoesNotBlockOnSystemOrDiskAssertions() throws {
@@ -899,25 +950,6 @@ final class ModeControllerTests: XCTestCase {
 
         XCTAssertEqual(snapshot.requestedMode, .night)
         XCTAssertEqual(fixture.display.sleepCount, 1)
-    }
-
-    func testNightAssertionInspectionUsesTheRemainingTransitionDeadline() {
-        let fixture = Fixture()
-        fixture.amphetamine.onOperation = { _ in
-            fixture.monotonicClock.now += 0.5
-        }
-        fixture.assertions.onOperation = { timeout in
-            XCTAssertEqual(timeout, 1, accuracy: 0.01)
-            fixture.monotonicClock.now += 1.1
-        }
-
-        XCTAssertThrowsError(
-            try fixture.controller.transition(to: .night, replacingActiveSession: true)
-        ) { error in
-            XCTAssertEqual(error as? ModeControlError, .operationTimedOut)
-        }
-        XCTAssertFalse(fixture.amphetamine.commands.contains(where: { $0.hasPrefix("start") }))
-        XCTAssertEqual(fixture.assertions.receivedTimeouts.count, 1)
     }
 
     func testBatteryProtectionInspectionUsesRemainingTransitionDeadline() {
@@ -972,8 +1004,7 @@ final class ModeControllerTests: XCTestCase {
         )
         XCTAssertEqual(snapshot.requestedMode, .night)
         XCTAssertEqual(fixture.display.sleepCount, 1)
-        XCTAssertEqual(markerAtDisplaySleep?.purpose, .pendingCleanup)
-        XCTAssertEqual(markerAtDisplaySleep?.expectedState, fixture.amphetamine.state)
+        XCTAssertEqual(markerAtDisplaySleep?.purpose, .activeMode)
         XCTAssertEqual(fixture.store.ownedSessionSignature?.purpose, .activeMode)
     }
 
@@ -1071,6 +1102,7 @@ final class ModeControllerTests: XCTestCase {
         XCTAssertEqual(fixture.store.ownedSessionSignature?.mode, snapshot.requestedMode)
         XCTAssertEqual(fixture.amphetamine.commands.suffix(3), ["startTimed:90:true", "closed:true", "read"])
         XCTAssertEqual(fixture.display.sleepCount, 1)
+        XCTAssertEqual(snapshot.safety, .ready)
     }
 
     func testTravelExpiryUsesVerifiedBackendTimerAfterStartupDelay() throws {
@@ -1537,18 +1569,41 @@ final class ModeControllerTests: XCTestCase {
         let fixture = Fixture()
         let controller = fixture.controller
         fixture.display.error = ModeControlError.backend("Display failed")
+        fixture.displayState.observation = .unavailable
 
-        XCTAssertThrowsError(try controller.transition(to: .night, replacingActiveSession: true))
+        let started = try controller.transition(to: .night, replacingActiveSession: true)
+        XCTAssertEqual(started.requestedMode, .night)
+        XCTAssertEqual(started.health, .ready)
+        XCTAssertEqual(started.safety, .nightDisplayStateUnavailable)
+        XCTAssertEqual(fixture.store.ownedSessionSignature?.purpose, .activeMode)
+
         let snapshot = controller.reconcile()
-        XCTAssertEqual(snapshot.health, .backendMismatch)
-        XCTAssertEqual(fixture.store.ownedSessionSignature?.purpose, .pendingCleanup)
+        XCTAssertEqual(snapshot.requestedMode, .night)
+        XCTAssertEqual(snapshot.health, .ready)
+        XCTAssertEqual(snapshot.safety, .nightDisplayStateUnavailable)
         let relaunchedSnapshot = fixture.controller.reconcile()
-        XCTAssertEqual(relaunchedSnapshot.requestedMode, .custom)
-        XCTAssertEqual(relaunchedSnapshot.health, .backendMismatch)
+        XCTAssertEqual(relaunchedSnapshot.requestedMode, .night)
+        XCTAssertEqual(relaunchedSnapshot.safety, .nightDisplayStateUnavailable)
 
         try controller.endActiveSessionForQuit()
         XCTAssertFalse(fixture.amphetamine.state.sessionIsActive)
         XCTAssertNil(fixture.store.ownedSessionSignature)
+    }
+
+    func testDisplaySleepFailureReportsUnlockedNightBeforeDisplayState() throws {
+        let fixture = Fixture()
+        fixture.display.error = ModeControlError.backend("Display failed")
+        fixture.screenLockState.isLocked = false
+        fixture.displayState.observation = .unavailable
+
+        let started = try fixture.controller.transition(
+            to: .night,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(started.requestedMode, .night)
+        XCTAssertEqual(started.safety, .nightUnlocked)
+        XCTAssertEqual(started.ownershipMarker?.purpose, .activeMode)
     }
 
     func testTransitionUsesOneEndToEndDeadline() throws {
@@ -1950,6 +2005,7 @@ final class ModeControllerTests: XCTestCase {
 
         XCTAssertEqual(snapshot.requestedMode, .night)
         XCTAssertTrue(snapshot.requiresPostUnlockChoice)
+        XCTAssertEqual(snapshot.safety, .nightUnlocked)
         XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
         XCTAssertEqual(fixture.store.lastRequestedMode, .night)
         XCTAssertEqual(fixture.store.ownedSessionSignature, marker)
@@ -1997,6 +2053,7 @@ final class ModeControllerTests: XCTestCase {
 
         XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 30)
         XCTAssertTrue(snapshot.requiresPostUnlockChoice)
+        XCTAssertEqual(snapshot.safety, .travelUnlocked)
         XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
         XCTAssertFalse(fixture.amphetamine.commands.contains("startInfinite:false"))
     }
@@ -2081,69 +2138,101 @@ final class ModeControllerTests: XCTestCase {
         _ = try controller.transition(to: .night, replacingActiveSession: true)
         fixture.screenLockState.isLocked = true
 
-        let snapshot = try controller.resleepAwayModeIfLocked(
+        let snapshot = try controller.resleepNightIfLocked(
             expectedOwnershipID: fixture.store.ownedSessionSignature?.id
         )
 
         XCTAssertEqual(snapshot.requestedMode, .night)
         XCTAssertEqual(fixture.display.sleepCount, 2)
-        XCTAssertEqual(fixture.assertions.callCount, 2)
+        XCTAssertEqual(fixture.assertions.callCount, 0)
+        XCTAssertEqual(snapshot.safety, .ready)
     }
 
-    func testResleepStopsWhenADisplayBlockerAppears() throws {
+    func testNightResleepUsesActualDisplayOutcomeInsteadOfAssertion() throws {
         let fixture = Fixture()
         let controller = fixture.controller
         _ = try controller.transition(to: .night, replacingActiveSession: true)
         fixture.screenLockState.isLocked = true
         fixture.assertions.blockers = ["Raycast"]
 
-        XCTAssertThrowsError(
-            try controller.resleepAwayModeIfLocked(
-                expectedOwnershipID: fixture.store.ownedSessionSignature?.id
-            )
-        ) { error in
-            XCTAssertEqual(error as? ModeControlError, .displaySleepBlocked(["Raycast"]))
-        }
-        XCTAssertEqual(fixture.display.sleepCount, 1)
+        let snapshot = try controller.resleepNightIfLocked(
+            expectedOwnershipID: fixture.store.ownedSessionSignature?.id
+        )
+
+        XCTAssertEqual(fixture.display.sleepCount, 2)
+        XCTAssertEqual(fixture.assertions.callCount, 0)
+        XCTAssertEqual(snapshot.safety, .ready)
+    }
+
+    func testNightResleepRequestFailureStillReportsObservedSafety() throws {
+        let fixture = Fixture()
+        let controller = fixture.controller
+        _ = try controller.transition(to: .night, replacingActiveSession: true)
+        fixture.screenLockState.isLocked = true
+        fixture.displayState.observation = .visible
+        fixture.display.error = ModeControlError.backend("Display sleep request failed")
+
+        let snapshot = try controller.resleepNightIfLocked(
+            expectedOwnershipID: fixture.store.ownedSessionSignature?.id
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .night)
+        XCTAssertEqual(snapshot.safety, .nightDisplaysVisible)
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+        XCTAssertNotNil(fixture.store.ownedSessionSignature)
     }
 
     func testResleepRechecksLockAfterBlockerInspection() throws {
         let fixture = Fixture()
         _ = try fixture.controller.transition(to: .night, replacingActiveSession: true)
-        fixture.screenLockState.isLocked = true
-        fixture.assertions.onOperation = { _ in
-            fixture.screenLockState.isLocked = false
-        }
+        fixture.screenLockState.queuedLockStates = [true, true, false]
+        let lockCallsBefore = fixture.screenLockState.callCount
 
-        let snapshot = try fixture.controller.resleepAwayModeIfLocked(
+        let snapshot = try fixture.controller.resleepNightIfLocked(
             expectedOwnershipID: fixture.store.ownedSessionSignature?.id
         )
 
         XCTAssertEqual(snapshot.requestedMode, .night)
         XCTAssertTrue(snapshot.requiresPostUnlockChoice)
-        XCTAssertEqual(fixture.screenLockState.callCount, 2)
+        XCTAssertEqual(snapshot.safety, .nightUnlocked)
+        XCTAssertGreaterThan(fixture.screenLockState.callCount, lockCallsBefore)
         XCTAssertEqual(fixture.display.sleepCount, 1)
         XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
     }
 
-    func testResleepDoesNotSleepAfterTravelExpiresDuringBlockerInspection() throws {
+    func testNightResleepTreatsUnlockDuringDisplayVerificationAsPostUnlockChoice() throws {
+        let fixture = Fixture()
+        _ = try fixture.controller.transition(to: .night, replacingActiveSession: true)
+        fixture.screenLockState.queuedLockStates = [true, true, true, true]
+        fixture.screenLockState.isLocked = false
+
+        let snapshot = try fixture.controller.resleepNightIfLocked(
+            expectedOwnershipID: fixture.store.ownedSessionSignature?.id
+        )
+
+        XCTAssertEqual(snapshot.requestedMode, .night)
+        XCTAssertEqual(snapshot.safety, .nightUnlocked)
+        XCTAssertTrue(snapshot.requiresPostUnlockChoice)
+        XCTAssertEqual(fixture.display.sleepCount, 2)
+        XCTAssertTrue(fixture.amphetamine.state.sessionIsActive)
+    }
+
+    func testTravelNeverResleepsAfterStart() throws {
         let fixture = Fixture()
         _ = try fixture.controller.transition(
             to: .travel(durationMinutes: 30, expiresAt: fixture.clock.now),
             replacingActiveSession: true
         )
         fixture.screenLockState.isLocked = true
-        fixture.assertions.onOperation = { _ in
-            fixture.amphetamine.state = .inactive
-        }
+        let initialSleepCount = fixture.display.sleepCount
 
-        let snapshot = try fixture.controller.resleepAwayModeIfLocked(
+        let snapshot = try fixture.controller.resleepNightIfLocked(
             expectedOwnershipID: fixture.store.ownedSessionSignature?.id
         )
 
-        XCTAssertEqual(snapshot.requestedMode, .off)
-        XCTAssertEqual(fixture.display.sleepCount, 1)
-        XCTAssertNil(fixture.store.ownedSessionSignature)
+        XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 30)
+        XCTAssertEqual(fixture.display.sleepCount, initialSleepCount)
+        XCTAssertNotNil(fixture.store.ownedSessionSignature)
     }
 
     func testStaleUnlockCheckCannotEndANewerAwaySession() throws {
@@ -2163,7 +2252,6 @@ final class ModeControllerTests: XCTestCase {
 
         XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 30)
         XCTAssertFalse(fixture.amphetamine.commands.dropFirst(commandCount).contains("end"))
-        XCTAssertEqual(fixture.screenLockState.callCount, 0)
     }
 
     func testStaleResleepCannotAffectANewerAwaySession() throws {
@@ -2177,13 +2265,101 @@ final class ModeControllerTests: XCTestCase {
         fixture.screenLockState.isLocked = true
         let sleepCount = fixture.display.sleepCount
 
-        let snapshot = try fixture.controller.resleepAwayModeIfLocked(
+        let snapshot = try fixture.controller.resleepNightIfLocked(
             expectedOwnershipID: staleOwnershipID
         )
 
         XCTAssertEqual(snapshot.requestedMode.travelDurationMinutes, 30)
         XCTAssertEqual(fixture.display.sleepCount, sleepCount)
-        XCTAssertEqual(fixture.screenLockState.callCount, 0)
+    }
+
+    func testRetryTravelLockPreservesSessionAndClearsDegradedState() throws {
+        let fixture = Fixture()
+        fixture.screenLockState.isLocked = false
+        let started = try fixture.controller.transition(
+            to: .travel(durationMinutes: 90, expiresAt: .distantPast),
+            replacingActiveSession: true
+        )
+        XCTAssertEqual(started.safety, .travelUnlocked)
+        let marker = try XCTUnwrap(started.ownershipMarker)
+        fixture.screenLockState.isLocked = true
+
+        let retried = try fixture.controller.retryTravelLock(
+            expectedOwnershipID: marker.id
+        )
+
+        XCTAssertEqual(retried.requestedMode.travelDurationMinutes, 90)
+        XCTAssertEqual(retried.ownershipMarker?.id, marker.id)
+        XCTAssertEqual(retried.safety, .ready)
+        XCTAssertEqual(fixture.display.sleepCount, 2)
+        XCTAssertFalse(fixture.amphetamine.commands.contains("end"))
+    }
+
+    func testTravelStartWaitsForAsynchronousLockState() throws {
+        let fixture = Fixture()
+        fixture.screenLockState.queuedLockStates = [false, true]
+
+        let snapshot = try fixture.controller.transition(
+            to: .travel(durationMinutes: 90, expiresAt: .distantPast),
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.safety, .ready)
+        XCTAssertGreaterThanOrEqual(fixture.screenLockState.callCount, 2)
+    }
+
+    func testNightStartWaitsForAsynchronousLockAndDisplayState() throws {
+        let fixture = Fixture()
+        fixture.screenLockState.queuedLockStates = [false, true, true]
+        fixture.displayState.queuedObservations = [.visible, .allAsleep]
+
+        let snapshot = try fixture.controller.transition(
+            to: .night,
+            replacingActiveSession: true
+        )
+
+        XCTAssertEqual(snapshot.safety, .ready)
+        XCTAssertGreaterThanOrEqual(fixture.screenLockState.callCount, 3)
+        XCTAssertEqual(fixture.displayState.callCount, 2)
+    }
+
+    func testRetryNightDisplaySleepPreservesSessionWhenDisplayStillVisible() throws {
+        let fixture = Fixture()
+        fixture.displayState.observation = .visible
+        let started = try fixture.controller.transition(
+            to: .night,
+            replacingActiveSession: true
+        )
+        let marker = try XCTUnwrap(started.ownershipMarker)
+
+        let retried = try fixture.controller.retryNightDisplaySleep(
+            expectedOwnershipID: marker.id
+        )
+
+        XCTAssertEqual(retried.requestedMode, .night)
+        XCTAssertEqual(retried.ownershipMarker?.id, marker.id)
+        XCTAssertEqual(retried.safety, .nightDisplaysVisible)
+        XCTAssertEqual(fixture.display.sleepCount, 2)
+        XCTAssertFalse(fixture.amphetamine.commands.contains("end"))
+    }
+
+    func testNightRetryWaitsForAsynchronousDisplayState() throws {
+        let fixture = Fixture()
+        fixture.displayState.observation = .visible
+        let started = try fixture.controller.transition(
+            to: .night,
+            replacingActiveSession: true
+        )
+        let marker = try XCTUnwrap(started.ownershipMarker)
+        let displayCallsBeforeRetry = fixture.displayState.callCount
+        fixture.displayState.queuedObservations = [.visible, .visible, .allAsleep]
+
+        let retried = try fixture.controller.retryNightDisplaySleep(
+            expectedOwnershipID: marker.id
+        )
+
+        XCTAssertEqual(retried.safety, .ready)
+        XCTAssertEqual(fixture.displayState.callCount - displayCallsBeforeRetry, 3)
     }
 
     func testBatteryProtectionMismatchBlocksNightAndTravelBeforeMutation() {

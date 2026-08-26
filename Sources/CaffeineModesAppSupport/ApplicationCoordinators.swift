@@ -107,8 +107,10 @@ public enum ModeSelectionConfirmation: Equatable, Sendable {
             let targetName = mode.confirmationDisplayName
             let effect: String
             switch mode {
-            case .night, .travel:
+            case .night:
                 effect = " All connected displays will turn off now. Your Mac will lock."
+            case let .travel(durationMinutes, _):
+                effect = " Your Mac will lock and keep working for \(durationMinutes) minutes. Displays can turn back on without stopping Travel."
             default:
                 effect = ""
             }
@@ -127,8 +129,10 @@ public enum ModeSelectionConfirmation: Equatable, Sendable {
             let targetName = mode.confirmationDisplayName
             let effect: String
             switch mode {
-            case .night, .travel:
+            case .night:
                 effect = " All connected displays will turn off now. Your Mac will lock."
+            case let .travel(durationMinutes, _):
+                effect = " Your Mac will lock and keep working for \(durationMinutes) minutes. Displays can turn back on without stopping Travel."
             default:
                 effect = ""
             }
@@ -138,6 +142,21 @@ public enum ModeSelectionConfirmation: Equatable, Sendable {
                 confirmButtonTitle: "Start \(targetName)"
             )
         }
+    }
+}
+
+public enum TravelAssertionWarningPresentation {
+    public static func message(processes: [String]) -> String? {
+        let names = Array(Set(processes)).sorted()
+        guard !names.isEmpty else { return nil }
+        let formatted: String
+        switch names.count {
+        case 1: formatted = names[0]
+        case 2: formatted = "\(names[0]) and \(names[1])"
+        default:
+            formatted = names.dropLast().joined(separator: ", ") + ", and " + names.last!
+        }
+        return "\(formatted) asked to keep a display on. That can use more battery or create heat. Travel still starts."
     }
 }
 
@@ -514,7 +533,7 @@ public struct LifecycleErrorState: Equatable, Sendable {
 
     public mutating func refresh(
         snapshot: ModeSnapshot,
-        report: PowerAssertionReport?,
+        report _: PowerAssertionReport?,
         now: Date,
         minimumVisibility: TimeInterval = 5
     ) {
@@ -532,9 +551,6 @@ public struct LifecycleErrorState: Equatable, Sendable {
                 || !snapshot.requestedMode.isAwayMode
         else { return }
 
-        if snapshot.requestedMode.isAwayMode {
-            guard let report, report.displaySleepBlockingProcesses.isEmpty else { return }
-        }
         clear()
     }
 }

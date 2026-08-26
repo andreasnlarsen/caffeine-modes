@@ -37,6 +37,18 @@ final class AwayModeWakeStateMachineTests: XCTestCase {
         XCTAssertNil(machine.resleepDeadline)
     }
 
+    func testTravelNeverArmsDisplayResleepAfterWakeOrDisplayReconnect() {
+        var machine = AwayModeWakeStateMachine()
+        _ = machine.modeDidChange(
+            to: .travel(durationMinutes: 90, expiresAt: .distantFuture)
+        )
+
+        XCTAssertEqual(machine.screensDidWake(now: 100), .none)
+        XCTAssertEqual(machine.displayConfigurationDidChange(now: 110), .none)
+        XCTAssertNil(machine.resleepDeadline)
+        XCTAssertEqual(machine.timerFired(now: 200), .none)
+    }
+
     func testUnlockEndsNightAndCancelsResleep() {
         var machine = AwayModeWakeStateMachine()
         _ = machine.modeDidChange(to: .night)

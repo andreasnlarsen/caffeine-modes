@@ -659,28 +659,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
     // MARK: - Modes
 
     private func makeModesView() -> NSView {
-        let headers = ["Mode", "Laptop", "Open + external", "Closed + external"]
-        let rows = [
-            headers.map { gridText($0, header: true) },
-            [
-                gridText("Work", header: true),
-                gridText("Mac and built-in display stay awake."),
-                gridText("Mac and all displays stay awake."),
-                gridText("External display stays awake. Normal clamshell rules apply.")
-            ],
-            [
-                gridText("Night", header: true),
-                gridText("Display turns off. Mac locks and keeps working."),
-                gridText("All displays turn off. Mac locks and keeps working."),
-                gridText("External display turns off. Mac keeps working.")
-            ],
-            [
-                gridText("Travel", header: true),
-                gridText("Display turns off. Mac locks and keeps working until the timer ends."),
-                gridText("All displays turn off. Mac locks and keeps working until the timer ends."),
-                gridText("External display turns off. Mac keeps working until the timer ends.")
-            ]
-        ]
+        let rows = Self.modeGridRows()
         let grid = NSGridView(views: rows)
         grid.columnSpacing = 16
         grid.rowSpacing = 12
@@ -694,9 +673,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
 
         let notes = NSStackView(views: [
-            detailText("Night and Travel turn off all connected displays."),
+            detailText("Night keeps all connected displays off. Travel does not."),
+            detailText("If a display turns on while your Mac is locked, Night turns it off again. Travel does nothing."),
+            detailText("Unplugging or reconnecting a display does not stop Travel or its timer."),
+            detailText("When you require battery protection, Amphetamine ends Night and Travel at that battery level."),
+            detailText("No mode keeps your network connected."),
             detailText("Works with displays and docks that already work normally with macOS and Amphetamine."),
-            detailText("Do not run a closed Mac inside an enclosed bag.")
+            detailText("Night and Travel can make a closed Mac hot. Do not run a closed Mac inside an enclosed bag.")
         ])
         notes.orientation = .vertical
         notes.alignment = .leading
@@ -706,7 +689,73 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         return paneStack(stack, spacing: 20)
     }
 
-    private func gridText(_ text: String, header: Bool = false) -> NSTextField {
+    static func modeGridRows() -> [[NSTextField]] {
+        let headers = ["Mode", "Laptop", "Open + external", "Closed + external"]
+        return [
+            headers.map { Self.modeGridText($0, header: true) },
+            [
+                Self.modeGridText("Work", header: true),
+                Self.modeGridText(
+                    "Mac and built-in display stay awake.",
+                    mode: "Work",
+                    setup: "Laptop"
+                ),
+                Self.modeGridText(
+                    "Mac and all displays stay awake.",
+                    mode: "Work",
+                    setup: "Open + external"
+                ),
+                Self.modeGridText(
+                    "External display stays awake. Normal clamshell rules apply.",
+                    mode: "Work",
+                    setup: "Closed + external"
+                )
+            ],
+            [
+                Self.modeGridText("Night", header: true),
+                Self.modeGridText(
+                    "Display turns off. Mac locks and keeps working.",
+                    mode: "Night",
+                    setup: "Laptop"
+                ),
+                Self.modeGridText(
+                    "All displays turn off. Mac locks and keeps working.",
+                    mode: "Night",
+                    setup: "Open + external"
+                ),
+                Self.modeGridText(
+                    "External display turns off. Mac locks and keeps working.",
+                    mode: "Night",
+                    setup: "Closed + external"
+                )
+            ],
+            [
+                Self.modeGridText("Travel", header: true),
+                Self.modeGridText(
+                    "Mac locks and keeps working until the timer ends. The display is not kept off.",
+                    mode: "Travel",
+                    setup: "Laptop"
+                ),
+                Self.modeGridText(
+                    "Mac locks and keeps working until the timer ends. Displays are not kept off.",
+                    mode: "Travel",
+                    setup: "Open + external"
+                ),
+                Self.modeGridText(
+                    "Mac locks and keeps working until the timer ends. The lid can stay closed.",
+                    mode: "Travel",
+                    setup: "Closed + external"
+                )
+            ]
+        ]
+    }
+
+    static func modeGridText(
+        _ text: String,
+        mode: String? = nil,
+        setup: String? = nil,
+        header: Bool = false
+    ) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(
             ofSize: header ? NSFont.systemFontSize : NSFont.smallSystemFontSize,
@@ -715,6 +764,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTo
         label.textColor = header ? .labelColor : .secondaryLabelColor
         label.alignment = .left
         label.preferredMaxLayoutWidth = SettingsLayout.modeColumnWidth
+        if let mode, let setup {
+            label.setAccessibilityLabel("\(mode), \(setup). \(text)")
+        }
         return label
     }
 

@@ -17,12 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let assertions = IOKitPowerAssertionInspector()
         let controller = ModeController(
             amphetamine: AmphetamineClient(),
-            assertions: assertions,
             screenLock: SystemScreenLockPolicyChecker(),
             screenLockState: CGSessionScreenLockStateInspector(),
             powerProtect: AmphetaminePowerProtectInspector(),
             clamshellContext: SystemClamshellContextInspector(),
             display: PMSetDisplaySleeper(),
+            displayState: SystemDisplayStateInspector(),
             store: store,
             batteryProtection: AmphetamineBatteryProtectionInspector(),
             batteryProtectionRequirement: store

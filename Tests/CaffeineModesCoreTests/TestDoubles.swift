@@ -154,12 +154,16 @@ final class FakeScreenLock: ScreenLockPolicyChecking {
 
 final class FakeScreenLockState: ScreenLockStateInspecting {
     var isLocked = true
+    var queuedLockStates: [Bool] = []
     var error: Error?
     var callCount = 0
 
     func screenIsLocked() throws -> Bool {
         callCount += 1
         if let error { throw error }
+        if !queuedLockStates.isEmpty {
+            return queuedLockStates.removeFirst()
+        }
         return isLocked
     }
 }
@@ -201,6 +205,20 @@ final class FakeDisplay: DisplaySleeping {
         onSleep?()
         if let error { throw error }
         sleepCount += 1
+    }
+}
+
+final class FakeDisplayState: DisplayStateInspecting {
+    var observation: DisplayStateObservation = .allAsleep
+    var queuedObservations: [DisplayStateObservation] = []
+    private(set) var callCount = 0
+
+    func currentState() -> DisplayStateObservation {
+        callCount += 1
+        if !queuedObservations.isEmpty {
+            return queuedObservations.removeFirst()
+        }
+        return observation
     }
 }
 
@@ -246,8 +264,12 @@ final class FixedClock: TimeProviding {
     init(now: Date = Date(timeIntervalSince1970: 1_700_000_000)) { self.now = now }
 }
 
-final class FixedMonotonicClock: MonotonicTimeProviding {
+final class FixedMonotonicClock: MonotonicTimeProviding, SafetyPollWaiting {
     var now: TimeInterval = 0
+
+    func wait(for interval: TimeInterval) {
+        now += interval
+    }
 }
 
 struct Fixture {
@@ -258,6 +280,7 @@ struct Fixture {
     let powerProtect = FakePowerProtect()
     let clamshellContext = FakeClamshellContext()
     let display = FakeDisplay()
+    let displayState = FakeDisplayState()
     let batteryProtection = FakeBatteryProtectionInspector()
     let store = MemoryStore()
     let batteryProtectionRequirement = MemoryBatteryProtectionRequirementStore()
@@ -267,17 +290,18 @@ struct Fixture {
     var controller: ModeController {
         ModeController(
             amphetamine: amphetamine,
-            assertions: assertions,
             screenLock: screenLock,
             screenLockState: screenLockState,
             powerProtect: powerProtect,
             clamshellContext: clamshellContext,
             display: display,
+            displayState: displayState,
             store: store,
             batteryProtection: batteryProtection,
             batteryProtectionRequirement: batteryProtectionRequirement,
             clock: clock,
-            monotonicClock: monotonicClock
+            monotonicClock: monotonicClock,
+            safetyPollWaiter: monotonicClock
         )
     }
 }

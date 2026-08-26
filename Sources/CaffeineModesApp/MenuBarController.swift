@@ -3,6 +3,13 @@ import CaffeineModesAppSupport
 import CaffeineModesCore
 import Foundation
 
+enum MenuBarCopy {
+    static let aboutInformativeText =
+        "Three clear Amphetamine modes for work, night, and short travel.\n\n"
+        + "Night and Travel can make a closed Mac hot. "
+        + "Do not run a closed Mac inside an enclosed bag."
+}
+
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
     private let controllerRunner: MenuControllerRunner
@@ -13,6 +20,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private let statusLine = NSMenuItem(title: "Checking status…", action: nil, keyEquivalent: "")
+    private let safetyDetailItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let retrySafetyItem = NSMenuItem(title: "Try Again", action: #selector(retryModeSafety), keyEquivalent: "")
+    private let turnOffSafetyItem = NSMenuItem(title: "Turn Off", action: #selector(turnOffDegradedMode), keyEquivalent: "")
     private let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
     private let quitItem = NSMenuItem(title: "Quit Caffeine Modes", action: #selector(quitApp), keyEquivalent: "q")
     private var modeItems: [OperatingModeKey: NSMenuItem] = [:]
@@ -117,6 +127,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func configureMenu() {
         statusLine.isEnabled = false
         menu.addItem(statusLine)
+        safetyDetailItem.isEnabled = false
+        safetyDetailItem.isHidden = true
+        menu.addItem(safetyDetailItem)
+        retrySafetyItem.target = self
+        retrySafetyItem.isHidden = true
+        menu.addItem(retrySafetyItem)
+        turnOffSafetyItem.target = self
+        turnOffSafetyItem.isHidden = true
+        menu.addItem(turnOffSafetyItem)
         menu.addItem(.separator())
 
         addModeItem(title: "Off", key: .off, action: #selector(selectOff))
@@ -194,6 +213,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                if case .travel = mode {
+                    self.powerReport = await self.controllerRunner.fetchPowerReport()
+                }
                 if let selected = try await self.modeSelectionCoordinator.select(mode) {
                     self.snapshot = selected
                     self.lifecycleError.clear()
@@ -218,7 +240,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         alert.alertStyle = .warning
         let presentation = reason.presentation
         alert.messageText = presentation.title
-        alert.informativeText = presentation.message
+        var message = presentation.message
+        let targetMode: OperatingMode
+        switch reason {
+        case let .start(mode), let .replaceActiveSession(mode):
+            targetMode = mode
+        }
+        if case .travel = targetMode,
+           let warning = TravelAssertionWarningPresentation.message(
+               processes: powerReport?.displaySleepBlockingProcesses ?? []
+           ) {
+            message += "\n\n\(warning)"
+        }
+        alert.informativeText = message
         alert.addButton(withTitle: presentation.confirmButtonTitle)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
@@ -226,6 +260,40 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func showSettings() {
         settingsWindow.showWindow(nil)
+    }
+
+    @objc private func retryModeSafety() {
+        guard !settingsWindow.isBusy,
+              !transitionInProgress,
+              let ownershipID = snapshot.ownershipMarker?.id
+        else { return }
+        let mode = snapshot.requestedMode
+        guard mode == .night || mode.travelDurationMinutes != nil else { return }
+
+        transitionInProgress = true
+        statusLine.title = mode == .night ? "Retrying display sleep…" : "Trying to lock…"
+        updateMenuAvailability()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let retried = try await self.controllerRunner.retrySafety(
+                    for: mode,
+                    expectedOwnershipID: ownershipID
+                )
+                self.snapshot = retried
+                self.lifecycleError.clear()
+                self.publishModeObservation(retried)
+            } catch {
+                self.showError(error)
+            }
+            self.transitionInProgress = false
+            self.updateMenuAvailability()
+            self.refresh()
+        }
+    }
+
+    @objc private func turnOffDegradedMode() {
+        select(.off)
     }
 
     @objc private func showModesHelp() {
@@ -244,7 +312,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Caffeine Modes"
-        alert.informativeText = "Three clear Amphetamine modes for work, night, and short travel.\n\nDo not run a closed Mac inside an enclosed bag."
+        alert.informativeText = MenuBarCopy.aboutInformativeText
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -275,7 +343,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         if error == nil {
             lifecycleError.noteSuccessfulLifecycleCheck()
-            if operation == .resleep {
+            if operation == .resleep,
+               let snapshot,
+               ScreenLifecycleController.completionSucceeded(
+                   for: operation,
+                   snapshot: snapshot
+               ) {
                 lifecycleError.noteSuccessfulResleep()
             }
         }
@@ -375,6 +448,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func updateMenuAvailability() {
         let activity = menuActivity
         modeItems.values.forEach { $0.isEnabled = activity.modesAreEnabled }
+        retrySafetyItem.isEnabled = activity.modesAreEnabled
+        turnOffSafetyItem.isEnabled = activity.modesAreEnabled
         quitItem.isEnabled = activity.quitIsEnabled
     }
 
@@ -406,9 +481,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func updateStatus() {
+        updateSafetyRecoveryItems()
         let title: String
         let toolTip: String
         let symbol: String
+        var statusAccessibilityDescription: String?
         if snapshot.requestedMode.isAwayMode,
            snapshot.ownershipMarker?.id == postUnlockChoice.activeOwnershipID {
             title = "\(snapshot.requestedMode.displayName) is still active · Choose Off or Work"
@@ -445,12 +522,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             let presentation = PowerStatusPresentation.make(
                 mode: snapshot.requestedMode,
+                safety: snapshot.safety,
                 report: powerReport,
                 travelSecondsRemaining: travelSeconds
             )
             title = presentation.statusLine
             toolTip = presentation.toolTip
-            if presentation.hasUnexpectedDisplayBlocker || presentation.hasInspectionError {
+            statusAccessibilityDescription = presentation.accessibilityDescription
+            if presentation.hasModeSafetyWarning || presentation.hasInspectionError {
                 symbol = "exclamationmark.triangle.fill"
             } else {
                 switch snapshot.requestedMode {
@@ -465,9 +544,38 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         statusLine.title = title
         statusItem.button?.toolTip = toolTip
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        let image = NSImage(
+            systemSymbolName: symbol,
+            accessibilityDescription: statusAccessibilityDescription ?? title
+        )
         image?.isTemplate = true
         statusItem.button?.image = image
+    }
+
+    private func updateSafetyRecoveryItems() {
+        let postUnlockChoiceIsActive = snapshot.ownershipMarker?.id == postUnlockChoice.activeOwnershipID
+        guard snapshot.safety != .ready, !postUnlockChoiceIsActive else {
+            safetyDetailItem.isHidden = true
+            retrySafetyItem.isHidden = true
+            turnOffSafetyItem.isHidden = true
+            return
+        }
+        guard let recovery = ModeSafetyRecoveryPresentation.make(
+            mode: snapshot.requestedMode,
+            safety: snapshot.safety,
+            report: powerReport
+        ) else {
+            safetyDetailItem.isHidden = true
+            retrySafetyItem.isHidden = true
+            turnOffSafetyItem.isHidden = true
+            return
+        }
+        safetyDetailItem.title = recovery.detail
+        safetyDetailItem.isHidden = false
+        retrySafetyItem.title = recovery.retryTitle
+        turnOffSafetyItem.title = recovery.turnOffTitle
+        retrySafetyItem.isHidden = false
+        turnOffSafetyItem.isHidden = false
     }
 
     private func requestPostUnlockChoiceIfNeeded(_ snapshot: ModeSnapshot) {
@@ -550,7 +658,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 }
 
-private final class MenuControllerRunner: @unchecked Sendable {
+final class MenuControllerRunner: @unchecked Sendable {
     private let queue = DispatchQueue(
         label: "com.andreaslar.caffeinemodes.menu-controller",
         qos: .userInitiated
@@ -573,6 +681,16 @@ private final class MenuControllerRunner: @unchecked Sendable {
         }
     }
 
+    func fetchPowerReport() async -> PowerAssertionReport? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(
+                    returning: try? self.assertions.inspect(timeout: 0.25)
+                )
+            }
+        }
+    }
+
     func transition(
         to mode: OperatingMode,
         authorizingReplacement: Bool
@@ -586,6 +704,31 @@ private final class MenuControllerRunner: @unchecked Sendable {
                             replacingActiveSession: authorizingReplacement
                         )
                     )
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func retrySafety(
+        for mode: OperatingMode,
+        expectedOwnershipID: UUID
+    ) async throws -> ModeSnapshot {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    let snapshot: ModeSnapshot
+                    if mode == .night {
+                        snapshot = try self.controller.retryNightDisplaySleep(
+                            expectedOwnershipID: expectedOwnershipID
+                        )
+                    } else {
+                        snapshot = try self.controller.retryTravelLock(
+                            expectedOwnershipID: expectedOwnershipID
+                        )
+                    }
+                    continuation.resume(returning: snapshot)
                 } catch {
                     continuation.resume(throwing: error)
                 }

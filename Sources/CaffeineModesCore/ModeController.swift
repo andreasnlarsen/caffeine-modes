@@ -2,20 +2,22 @@ import Foundation
 
 public final class ModeController: ModeControlling {
     private let amphetamine: AmphetamineControlling
-    private let assertions: PowerAssertionInspecting
     private let screenLock: ScreenLockPolicyChecking
     private let screenLockState: ScreenLockStateInspecting
     private let powerProtect: PowerProtectInspecting
     private let clamshellContext: ClamshellContextInspecting
     private let display: DisplaySleeping
+    private let displayState: DisplayStateInspecting
     private let store: ModeStateStoring
     private let batteryProtection: AmphetamineBatteryProtectionInspecting
     private let batteryProtectionRequirement: BatteryProtectionRequirementStoring
     private let clock: TimeProviding
     private let monotonicClock: MonotonicTimeProviding
+    private let safetyPollWaiter: SafetyPollWaiting
     private let operationTimeout: TimeInterval
     private let readinessTimeout: TimeInterval
     private let mutationRecoveryReserve: TimeInterval = 0.5
+    private let safetyPollInterval: TimeInterval = 0.05
     private var lastMutationFailure: String?
     // Serializes every public entry point so the setup window can run its
     // checks and the bounded readiness action off the main thread without
@@ -24,32 +26,34 @@ public final class ModeController: ModeControlling {
 
     public init(
         amphetamine: AmphetamineControlling,
-        assertions: PowerAssertionInspecting,
         screenLock: ScreenLockPolicyChecking,
         screenLockState: ScreenLockStateInspecting,
         powerProtect: PowerProtectInspecting,
         clamshellContext: ClamshellContextInspecting,
         display: DisplaySleeping,
+        displayState: DisplayStateInspecting,
         store: ModeStateStoring,
         batteryProtection: AmphetamineBatteryProtectionInspecting,
         batteryProtectionRequirement: BatteryProtectionRequirementStoring,
         clock: TimeProviding = SystemTimeProvider(),
         monotonicClock: MonotonicTimeProviding = SystemMonotonicTimeProvider(),
+        safetyPollWaiter: SafetyPollWaiting = SystemSafetyPollWaiter(),
         operationTimeout: TimeInterval = 2,
         readinessTimeout: TimeInterval = 45
     ) {
         self.amphetamine = amphetamine
-        self.assertions = assertions
         self.screenLock = screenLock
         self.screenLockState = screenLockState
         self.powerProtect = powerProtect
         self.clamshellContext = clamshellContext
         self.display = display
+        self.displayState = displayState
         self.store = store
         self.batteryProtection = batteryProtection
         self.batteryProtectionRequirement = batteryProtectionRequirement
         self.clock = clock
         self.monotonicClock = monotonicClock
+        self.safetyPollWaiter = safetyPollWaiter
         self.operationTimeout = operationTimeout
         self.readinessTimeout = readinessTimeout
     }
@@ -149,7 +153,13 @@ public final class ModeController: ModeControlling {
             }
 
             store.lastRequestedMode = signature.mode
-            return snapshot(signature.mode, state, .ready, marker: signature)
+            return snapshot(
+                signature.mode,
+                state,
+                .ready,
+                safety: currentSafety(for: signature.mode),
+                marker: signature
+            )
         } catch {
             return snapshotFrom(error: error)
         }
@@ -190,7 +200,6 @@ public final class ModeController: ModeControlling {
         var sessionStartWasAttempted = false
         var sessionStartCompleted = false
         var fallbackCleanupSignature: OwnedSessionSignature?
-        var pendingCleanupWasPersisted = false
 
         do {
             var startState = preflightState
@@ -200,7 +209,7 @@ public final class ModeController: ModeControlling {
                     sourceMode: preflightSourceMode,
                     targetMode: targetMode
                 )
-                if targetMode.requiresDisplaySleep {
+                if targetMode.policy.requiresBatteryProtection {
                     try requireBatteryProtection(for: targetMode, deadline: deadline)
                 }
                 preStartMutationWasAttempted = true
@@ -312,23 +321,32 @@ public final class ModeController: ModeControlling {
             }
             lastMutationFailure = nil
 
-            if committedMode.requiresDisplaySleep, let marker {
-                store.lastRequestedMode = .custom
-                store.ownedSessionSignature = cleanupSignature(
-                    id: marker.id,
-                    mode: marker.mode,
-                    startedAt: marker.startedAt,
-                    observed: observed
-                )
-                pendingCleanupWasPersisted = true
-                try display.sleepDisplay(timeout: try remainingTime(deadline))
-                try checkDeadline(deadline)
-            }
-
             store.lastRequestedMode = committedMode
             store.ownedSessionSignature = marker
 
-            return snapshot(committedMode, observed, .ready, marker: marker)
+            var safety = ModeSafety.ready
+            var safetyDetail: String?
+            if committedMode.policy.requiresLockVerification, marker != nil {
+                do {
+                    try display.sleepDisplay(timeout: try remainingTime(deadline))
+                    try checkDeadline(deadline)
+                    safety = waitForReadySafety(for: committedMode, deadline: deadline)
+                } catch {
+                    safety = waitForReadySafety(for: committedMode, deadline: deadline)
+                    if safety != .ready {
+                        safetyDetail = "The mode is active, but Caffeine Modes could not verify its safety state."
+                    }
+                }
+            }
+
+            return snapshot(
+                committedMode,
+                observed,
+                .ready,
+                safety: safety,
+                detail: safetyDetail,
+                marker: marker
+            )
         } catch {
             if !preStartMutationWasAttempted, !sessionStartWasAttempted {
                 if let modeError = error as? ModeControlError {
@@ -338,28 +356,26 @@ public final class ModeController: ModeControlling {
                     ?? error.localizedDescription
                 throw ModeControlError.backend(detail)
             }
-            if !pendingCleanupWasPersisted {
-                if targetMode == .off {
-                    store.ownedSessionSignature = verifiedPriorSignatureAfterFailedMutation(
-                        signatureBeforeMutation,
-                        deadline: deadline
-                    )
-                } else if sessionStartWasAttempted {
-                    store.ownedSessionSignature = signatureAfterFailedSessionStart(
-                        targetMode,
-                        priorSignature: signatureBeforeMutation,
-                        startCompleted: sessionStartCompleted,
-                        fallbackSignature: fallbackCleanupSignature,
-                        deadline: deadline
-                    )
-                } else if preStartMutationWasAttempted {
-                    store.ownedSessionSignature = verifiedPriorSignatureAfterFailedMutation(
-                        signatureBeforeMutation,
-                        deadline: deadline
-                    )
-                } else {
-                    store.ownedSessionSignature = signatureBeforeMutation
-                }
+            if targetMode == .off {
+                store.ownedSessionSignature = verifiedPriorSignatureAfterFailedMutation(
+                    signatureBeforeMutation,
+                    deadline: deadline
+                )
+            } else if sessionStartWasAttempted {
+                store.ownedSessionSignature = signatureAfterFailedSessionStart(
+                    targetMode,
+                    priorSignature: signatureBeforeMutation,
+                    startCompleted: sessionStartCompleted,
+                    fallbackSignature: fallbackCleanupSignature,
+                    deadline: deadline
+                )
+            } else if preStartMutationWasAttempted {
+                store.ownedSessionSignature = verifiedPriorSignatureAfterFailedMutation(
+                    signatureBeforeMutation,
+                    deadline: deadline
+                )
+            } else {
+                store.ownedSessionSignature = signatureBeforeMutation
             }
             store.lastRequestedMode = .custom
             let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -550,13 +566,13 @@ public final class ModeController: ModeControlling {
         return postUnlockChoiceSnapshot(current)
     }
 
-    public func resleepAwayModeIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+    public func resleepNightIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
         entryLock.lock()
         defer { entryLock.unlock() }
         let deadline = makeDeadline()
         let current = reconcile(deadline: deadline)
         guard current.health == .ready,
-              current.requestedMode.isAwayMode,
+              current.requestedMode == .night,
               let marker = current.ownershipMarker,
               marker.purpose == .activeMode,
               marker.id == expectedOwnershipID,
@@ -567,28 +583,113 @@ public final class ModeController: ModeControlling {
         guard try screenLockState.screenIsLocked() else {
             return postUnlockChoiceSnapshot(current)
         }
-        let blockers = try assertions.inspect(timeout: try remainingTime(deadline))
-            .displaySleepBlockingProcesses
-        try checkDeadline(deadline)
-        guard blockers.isEmpty else {
-            throw ModeControlError.displaySleepBlocked(blockers)
-        }
-
         let refreshed = reconcile(deadline: deadline)
         guard refreshed.health == .ready,
-              refreshed.requestedMode.isAwayMode,
+              refreshed.requestedMode == .night,
               let refreshedMarker = refreshed.ownershipMarker,
               refreshedMarker.id == marker.id,
               refreshedMarker.purpose == .activeMode,
               let refreshedState = refreshed.observedState,
               stateMatchesOwnedSignature(refreshedState, signature: refreshedMarker)
         else { return refreshed }
+        if refreshed.safety == .nightUnlocked {
+            return postUnlockChoiceSnapshot(refreshed)
+        }
+        guard refreshed.safety != .nightLockStateUnavailable else {
+            return refreshed
+        }
         guard try screenLockState.screenIsLocked() else {
             return postUnlockChoiceSnapshot(refreshed)
         }
-        try display.sleepDisplay(timeout: try remainingTime(deadline))
-        try checkDeadline(deadline)
-        return refreshed
+        do {
+            try display.sleepDisplay(timeout: try remainingTime(deadline))
+            try checkDeadline(deadline)
+        } catch {
+            let safety = waitForReadySafety(for: .night, deadline: deadline)
+            if safety == .nightUnlocked {
+                return postUnlockChoiceSnapshot(refreshed)
+            }
+            return snapshot(
+                refreshed.requestedMode,
+                refreshed.observedState,
+                refreshed.health,
+                safety: safety,
+                detail: safety == .ready
+                    ? nil
+                    : "Night is active, but Caffeine Modes could not verify that every display is off.",
+                marker: refreshedMarker
+            )
+        }
+        let safety = waitForReadySafety(for: .night, deadline: deadline)
+        if safety == .nightUnlocked {
+            return postUnlockChoiceSnapshot(refreshed)
+        }
+        return snapshot(
+            refreshed.requestedMode,
+            refreshed.observedState,
+            refreshed.health,
+            safety: safety,
+            marker: refreshedMarker
+        )
+    }
+
+    public func retryNightDisplaySleep(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        try retrySafetyAction(for: .night, expectedOwnershipID: expectedOwnershipID)
+    }
+
+    public func retryTravelLock(expectedOwnershipID: UUID?) throws -> ModeSnapshot {
+        entryLock.lock()
+        defer { entryLock.unlock() }
+        return try retrySafetyActionLocked(for: .travel, expectedOwnershipID: expectedOwnershipID)
+    }
+
+    private func retrySafetyAction(
+        for target: SafetyRetryTarget,
+        expectedOwnershipID: UUID?
+    ) throws -> ModeSnapshot {
+        entryLock.lock()
+        defer { entryLock.unlock() }
+        return try retrySafetyActionLocked(for: target, expectedOwnershipID: expectedOwnershipID)
+    }
+
+    private func retrySafetyActionLocked(
+        for target: SafetyRetryTarget,
+        expectedOwnershipID: UUID?
+    ) throws -> ModeSnapshot {
+        let deadline = makeDeadline()
+        let current = reconcile(deadline: deadline)
+        guard current.health == .ready,
+              target.matches(current.requestedMode),
+              let marker = current.ownershipMarker,
+              marker.purpose == .activeMode,
+              marker.id == expectedOwnershipID,
+              let observed = current.observedState,
+              stateMatchesOwnedSignature(observed, signature: marker)
+        else { return current }
+
+        do {
+            try display.sleepDisplay(timeout: try remainingTime(deadline))
+            try checkDeadline(deadline)
+            return snapshot(
+                current.requestedMode,
+                observed,
+                .ready,
+                safety: waitForReadySafety(for: current.requestedMode, deadline: deadline),
+                marker: marker
+            )
+        } catch {
+            let safety = waitForReadySafety(for: current.requestedMode, deadline: deadline)
+            return snapshot(
+                current.requestedMode,
+                observed,
+                .ready,
+                safety: safety,
+                detail: safety == .ready
+                    ? nil
+                    : "The mode is active, but Caffeine Modes could not verify its safety state.",
+                marker: marker
+            )
+        }
     }
 
     private func postUnlockChoiceSnapshot(_ current: ModeSnapshot) -> ModeSnapshot {
@@ -596,6 +697,7 @@ public final class ModeController: ModeControlling {
             current.requestedMode,
             current.observedState,
             current.health,
+            safety: unlockedSafety(for: current.requestedMode),
             detail: "You unlocked your Mac. Choose Off or Work.",
             marker: current.ownershipMarker,
             requiresPostUnlockChoice: true
@@ -712,21 +814,17 @@ public final class ModeController: ModeControlling {
             guard !state.triggersEnabled else { throw ModeControlError.triggersEnabled }
         }
 
-        if mode.requiresDisplaySleep {
+        if mode.policy.requiresBatteryProtection {
             try requireBatteryProtection(for: mode, deadline: deadline)
             guard powerProtect.inspect().isReady else {
                 throw ModeControlError.powerProtectMissing
             }
+        }
+        if mode.policy.requiresImmediateLockPolicy {
             guard try screenLock.hasImmediateScreenLock(timeout: try remainingTime(deadline)) else {
                 throw ModeControlError.screenLockNotImmediate
             }
             try checkDeadline(deadline)
-            let blockers = try assertions.inspect(timeout: try remainingTime(deadline))
-                .displaySleepBlockingProcesses
-            try checkDeadline(deadline)
-            guard blockers.isEmpty else {
-                throw ModeControlError.displaySleepBlocked(blockers)
-            }
         }
         return state
     }
@@ -759,7 +857,7 @@ public final class ModeController: ModeControlling {
         for mode: OperatingMode,
         deadline: OperationDeadline
     ) throws {
-        guard mode.requiresDisplaySleep else { return }
+        guard mode.policy.requiresBatteryProtection else { return }
         guard try currentBatteryProtectionStatus(deadline: deadline).isReady else {
             throw ModeControlError.batteryProtectionNotConfigured(mode)
         }
@@ -1155,6 +1253,7 @@ public final class ModeController: ModeControlling {
         _ mode: OperatingMode,
         _ state: AmphetamineState?,
         _ health: ControlHealth,
+        safety: ModeSafety = .ready,
         detail: String? = nil,
         marker: OwnedSessionSignature? = nil,
         requiresPostUnlockChoice: Bool = false
@@ -1164,6 +1263,7 @@ public final class ModeController: ModeControlling {
             observedState: state,
             ownershipMarker: marker ?? store.ownedSessionSignature,
             health: health,
+            safety: safety,
             detail: detail,
             requiresPostUnlockChoice: requiresPostUnlockChoice
         )
@@ -1180,17 +1280,66 @@ public final class ModeController: ModeControlling {
         }
         return snapshot(.custom, nil, health, detail: error.localizedDescription)
     }
+
+    private func currentSafety(for mode: OperatingMode) -> ModeSafety {
+        switch mode {
+        case .night:
+            do {
+                guard try screenLockState.screenIsLocked() else { return .nightUnlocked }
+            } catch {
+                return .nightLockStateUnavailable
+            }
+            switch displayState.currentState() {
+            case .allAsleep: return .ready
+            case .visible: return .nightDisplaysVisible
+            case .unavailable: return .nightDisplayStateUnavailable
+            }
+        case .travel:
+            do {
+                return try screenLockState.screenIsLocked() ? .ready : .travelUnlocked
+            } catch {
+                return .travelLockStateUnavailable
+            }
+        case .off, .work, .custom:
+            return .ready
+        }
+    }
+
+    private func waitForReadySafety(
+        for mode: OperatingMode,
+        deadline: OperationDeadline
+    ) -> ModeSafety {
+        var safety = currentSafety(for: mode)
+        while safety != .ready {
+            let remaining = deadline.expiresAt - monotonicClock.now
+            guard remaining > 0 else { return safety }
+            safetyPollWaiter.wait(for: min(safetyPollInterval, remaining))
+            safety = currentSafety(for: mode)
+        }
+        return safety
+    }
+
+    private func unlockedSafety(for mode: OperatingMode) -> ModeSafety {
+        switch mode {
+        case .night: .nightUnlocked
+        case .travel: .travelUnlocked
+        case .off, .work, .custom: .ready
+        }
+    }
+}
+
+private enum SafetyRetryTarget {
+    case night
+    case travel
+
+    func matches(_ mode: OperatingMode) -> Bool {
+        switch (self, mode) {
+        case (.night, .night), (.travel, .travel): true
+        default: false
+        }
+    }
 }
 
 private struct OperationDeadline {
     let expiresAt: TimeInterval
-}
-
-private extension OperatingMode {
-    var requiresDisplaySleep: Bool {
-        switch self {
-        case .night, .travel: true
-        default: false
-        }
-    }
 }

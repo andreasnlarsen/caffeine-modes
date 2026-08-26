@@ -317,6 +317,31 @@ final class SystemClamshellContextInspector: ClamshellContextInspecting {
     }
 }
 
+final class SystemDisplayStateInspector: DisplayStateInspecting {
+    func currentState() -> DisplayStateObservation {
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success else {
+            return Self.classify(asleepStates: nil)
+        }
+        guard count > 0 else { return Self.classify(asleepStates: []) }
+
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        var filledCount: UInt32 = 0
+        guard CGGetOnlineDisplayList(count, &displays, &filledCount) == .success else {
+            return Self.classify(asleepStates: nil)
+        }
+        let asleepStates = displays.prefix(Int(filledCount)).map {
+            CGDisplayIsAsleep($0) != 0
+        }
+        return Self.classify(asleepStates: asleepStates)
+    }
+
+    static func classify(asleepStates: [Bool]?) -> DisplayStateObservation {
+        guard let asleepStates, !asleepStates.isEmpty else { return .unavailable }
+        return asleepStates.contains(false) ? .visible : .allAsleep
+    }
+}
+
 final class AmphetamineBatteryProtectionInspector: AmphetamineBatteryProtectionInspecting {
     private final class PreferenceRead: @unchecked Sendable {
         let synchronize: () -> Bool

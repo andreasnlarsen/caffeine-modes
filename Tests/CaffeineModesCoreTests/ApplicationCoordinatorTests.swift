@@ -511,7 +511,7 @@ final class ApplicationCoordinatorTests: XCTestCase {
         XCTAssertEqual(state.message, "Work could not start")
     }
 
-    func testLifecycleErrorStaysVisibleWhileAwayDisplayIsStillBlocked() {
+    func testDisplayAssertionDoesNotKeepAnOldLifecycleErrorVisible() {
         let started = Date(timeIntervalSince1970: 1_700_000_000)
         var state = LifecycleErrorState()
         state.record("Display sleep is blocked", at: started)
@@ -521,13 +521,6 @@ final class ApplicationCoordinatorTests: XCTestCase {
             snapshot: Self.snapshot(.night),
             report: PowerAssertionReport(displaySleepBlockingProcesses: ["Raycast"]),
             now: started.addingTimeInterval(30)
-        )
-        XCTAssertEqual(state.message, "Display sleep is blocked")
-
-        state.refresh(
-            snapshot: Self.snapshot(.night),
-            report: .empty,
-            now: started.addingTimeInterval(31)
         )
         XCTAssertNil(state.message)
     }
@@ -734,7 +727,9 @@ final class ApplicationCoordinatorTests: XCTestCase {
         ).presentation
 
         XCTAssertEqual(confirmation.title, "Start Travel for 90 Minutes?")
-        XCTAssertTrue(confirmation.message.contains("All connected displays will turn off now. Your Mac will lock."))
+        XCTAssertTrue(confirmation.message.contains("Your Mac will lock and keep working for 90 minutes."))
+        XCTAssertTrue(confirmation.message.contains("Displays can turn back on without stopping Travel."))
+        XCTAssertFalse(confirmation.message.contains("All connected displays will turn off"))
         XCTAssertEqual(confirmation.confirmButtonTitle, "Start Travel for 90 Minutes")
     }
 
@@ -748,8 +743,17 @@ final class ApplicationCoordinatorTests: XCTestCase {
             "Replace the Current Session and Start Travel for 30 Minutes?"
         )
         XCTAssertTrue(confirmation.message.contains("Travel for 30 Minutes"))
-        XCTAssertTrue(confirmation.message.contains("All connected displays will turn off now. Your Mac will lock."))
+        XCTAssertTrue(confirmation.message.contains("Your Mac will lock and keep working for 30 minutes."))
+        XCTAssertTrue(confirmation.message.contains("Displays can turn back on without stopping Travel."))
         XCTAssertEqual(confirmation.confirmButtonTitle, "Start Travel for 30 Minutes")
+    }
+
+    func testTravelAssertionWarningNamesRequestWithoutCallingItTheCause() {
+        XCTAssertEqual(
+            TravelAssertionWarningPresentation.message(processes: ["Polytopia"]),
+            "Polytopia asked to keep a display on. That can use more battery or create heat. Travel still starts."
+        )
+        XCTAssertNil(TravelAssertionWarningPresentation.message(processes: []))
     }
 
     func testUnexpectedModeErrorDoesNotAskForConfirmation() async {

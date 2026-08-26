@@ -39,6 +39,18 @@ final class ScreenLifecycleController: NSObject {
 
     var isBusy: Bool { activity.isBusy }
 
+    static func completionSucceeded(
+        for operation: Operation.Kind,
+        snapshot: ModeSnapshot
+    ) -> Bool {
+        switch operation {
+        case .unlockCheck:
+            return true
+        case .resleep:
+            return snapshot.requiresPostUnlockChoice || snapshot.safety == .ready
+        }
+    }
+
     init(
         controller: ModeControlling,
         didFinish: @escaping (ModeSnapshot?, Error?, Operation.Kind) -> Void
@@ -184,9 +196,11 @@ final class ScreenLifecycleController: NSObject {
     }
 
     private func startResleep() {
-        guard observedMode.isAwayMode, let ownershipID = observedOwnershipID else { return }
+        guard observedMode.policy.resleepsAfterDisplayWake,
+              let ownershipID = observedOwnershipID
+        else { return }
         activeOperation = .resleep(ownershipID)
-        runner.resleepAwayModeIfLocked(expectedOwnershipID: ownershipID) { [weak self] result in
+        runner.resleepNightIfLocked(expectedOwnershipID: ownershipID) { [weak self] result in
             self?.finish(result)
         }
     }
@@ -216,7 +230,10 @@ final class ScreenLifecycleController: NSObject {
         let succeeded: Bool
         switch result {
         case let .success(snapshot) where LifecycleObservationPolicy.accepts(snapshot):
-            succeeded = true
+            succeeded = Self.completionSucceeded(
+                for: completedOperation.kind,
+                snapshot: snapshot
+            )
             modeDidChange(snapshot: snapshot)
             didFinish(snapshot, nil, completedOperation.kind)
         case let .success(snapshot):
@@ -262,7 +279,7 @@ final class ScreenLifecycleController: NSObject {
                 guard let self else { return }
                 self.timer = nil
                 guard
-                      self.observedMode.isAwayMode,
+                      self.observedMode.policy.resleepsAfterDisplayWake,
                       self.observedOwnershipID != nil,
                       self.activity.requestResleep()
                 else { return }
@@ -312,12 +329,12 @@ private final class ScreenLifecycleRunner: @unchecked Sendable {
         }, completion: completion)
     }
 
-    func resleepAwayModeIfLocked(
+    func resleepNightIfLocked(
         expectedOwnershipID: UUID,
         _ completion: @escaping @MainActor (Result<ModeSnapshot, Error>) -> Void
     ) {
         perform({
-            try self.controller.resleepAwayModeIfLocked(expectedOwnershipID: expectedOwnershipID)
+            try self.controller.resleepNightIfLocked(expectedOwnershipID: expectedOwnershipID)
         }, completion: completion)
     }
 

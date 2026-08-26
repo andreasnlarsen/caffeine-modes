@@ -11,7 +11,8 @@ public enum AwayModeWakeAction: Equatable, Sendable {
 public struct AwayModeWakeStateMachine: Sendable {
     public private(set) var resleepDeadline: TimeInterval?
 
-    private var awayModeIsActive = false
+    private var observesUnlock = false
+    private var resleepsAfterDisplayWake = false
     private let resleepDelay: TimeInterval
 
     public init(resleepDelay: TimeInterval = 30) {
@@ -23,14 +24,15 @@ public struct AwayModeWakeStateMachine: Sendable {
         restoredSession: Bool = false,
         now: TimeInterval? = nil
     ) -> AwayModeWakeAction {
-        let shouldCheckRestoredAwayMode = restoredSession && mode.isAwayMode
-        awayModeIsActive = mode.isAwayMode
-        if !awayModeIsActive {
+        let shouldCheckRestoredMode = restoredSession && mode.policy.observesUnlock
+        observesUnlock = mode.policy.observesUnlock
+        resleepsAfterDisplayWake = mode.policy.resleepsAfterDisplayWake
+        if !resleepsAfterDisplayWake {
             resleepDeadline = nil
-        } else if shouldCheckRestoredAwayMode, let now {
+        } else if shouldCheckRestoredMode, let now {
             resleepDeadline = now + resleepDelay
         }
-        return shouldCheckRestoredAwayMode ? .checkLockState : .none
+        return shouldCheckRestoredMode ? .checkLockState : .none
     }
 
     public mutating func screensDidWake(now: TimeInterval) -> AwayModeWakeAction {
@@ -44,7 +46,7 @@ public struct AwayModeWakeStateMachine: Sendable {
     }
 
     private mutating func displayMayBeVisible(now: TimeInterval) -> AwayModeWakeAction {
-        guard awayModeIsActive else {
+        guard resleepsAfterDisplayWake else {
             resleepDeadline = nil
             return .none
         }
@@ -56,16 +58,17 @@ public struct AwayModeWakeStateMachine: Sendable {
         isLocked: Bool,
         now: TimeInterval
     ) -> AwayModeWakeAction {
-        guard awayModeIsActive, resleepDeadline != nil else { return .none }
+        guard observesUnlock else { return .none }
         if !isLocked {
             resleepDeadline = nil
             return .finishAfterUnlock
         }
+        guard resleepDeadline != nil else { return .none }
         return timerFired(now: now)
     }
 
     public mutating func timerFired(now: TimeInterval) -> AwayModeWakeAction {
-        guard awayModeIsActive,
+        guard resleepsAfterDisplayWake,
               let deadline = resleepDeadline,
               now >= deadline
         else { return .none }

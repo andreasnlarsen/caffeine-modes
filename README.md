@@ -6,7 +6,7 @@ It gives you three policies:
 
 - Work keeps the Mac and all connected displays awake. The lid follows normal macOS behavior.
 - Night turns off all connected displays and keeps the locked Mac working. After you unlock, choose Off or Work.
-- Travel does the same for 30, 60, 90, or 120 minutes. After you unlock, choose Off or Work. Amphetamine's timer still ends Travel.
+- Travel locks the Mac and keeps it working for 30, 60, 90, or 120 minutes. Displays can wake or reconnect without stopping Travel. After you unlock, choose Off or Work. Amphetamine's timer still ends Travel.
 
 Battery protection is required by default at 15%. Night and Travel start only when Amphetamine is set to end sessions at 15%, without a prompt or power-adapter exception. Amphetamine owns the cutoff, so it still works if Caffeine Modes stops.
 
@@ -48,9 +48,9 @@ In Settings > General, choose the battery protection that Night and Travel requi
 
 Confirm every Work, Night, or Travel start. Amphetamine does not provide a stable session identity. Your confirmation also allows the new mode to replace a session that appears between the safety check and the start command.
 
-Caffeine Modes also asks before it ends or replaces an active session, even when the policy matches the selected mode. A replacement alert names the mode that will start. Night and Travel warn that all connected displays will turn off and the Mac will lock.
+Caffeine Modes also asks before it ends or replaces an active session, even when the policy matches the selected mode. A replacement alert names the mode that will start. Night says that all connected displays will turn off and the Mac will lock. Travel says that the Mac will lock for the selected time and that displays can turn back on.
 
-If a key press shows the lock screen during Night or Travel, stay locked. The displays turn off again after 30 seconds. Press Escape to turn them off sooner when macOS allows it. When you unlock, Caffeine Modes suggests Off or Work. You must confirm before it changes Amphetamine. Change the suggestion in Settings.
+If a key press shows the lock screen during Night, stay locked. Night turns the displays off again after 30 seconds. Press Escape to turn them off sooner when macOS allows it. Travel does not turn a display off again after it wakes. When you unlock Night or Travel, Caffeine Modes suggests Off or Work. You must confirm before it changes Amphetamine. Change the suggestion in Settings.
 
 When you quit Caffeine Modes with an active Amphetamine session, choose one action:
 
@@ -66,13 +66,13 @@ Logout, restart, and shutdown do not show this prompt. Caffeine Modes exits with
 
 Caffeine Modes keeps three macOS power facts separate:
 
-- **Display kept on** means a named process prevents the screen from sleeping. Night and Travel stop before they change Amphetamine when this is true.
+- **Display stay-awake request** means a named process asked macOS to keep a display on. This does not prove that the display is visible. It never blocks Night or Travel.
 - **Automatic sleep blocked** means a named process prevents idle system sleep. The display can still turn off. Night and Travel do not block on this fact because their purpose is to keep work running.
 - **Disk idle sleep blocked** means a process keeps storage active. This does not mean that the display or Mac must stay awake. It appears only in the menu-bar tooltip.
 
-Off reports these facts. It never stops another process. Temporary assertions owned by macOS system services are omitted from the Off summary. Display blockers remain visible because they can stop Night or Travel from sleeping the screen.
+Off reports these facts. It never stops another process. Temporary assertions owned by macOS system services are omitted from the Off summary. Night checks the real display result after its sleep request. Travel shows a display request in its start confirmation and tooltip because it can use more battery or create heat.
 
-Codex can create an automatic-system-sleep assertion when **Prevent Sleep While Running** is on. **Keep Remote Control Awake While Plugged In** can use an automatic-system-sleep or network-client assertion during plugged-in remote work. Caffeine Modes reports both as **Automatic sleep blocked**. Claude and other developer tools can do the same. These assertions do not block Night or Travel unless the process also creates a display-sleep assertion.
+Codex can create an automatic-system-sleep assertion when **Prevent Sleep While Running** is on. **Keep Remote Control Awake While Plugged In** can use an automatic-system-sleep or network-client assertion during plugged-in remote work. Caffeine Modes reports both as **Automatic sleep blocked**. Claude and other developer tools can do the same. No process assertion makes Caffeine Modes stop or quit that process.
 
 ## Screen setups
 
@@ -80,11 +80,11 @@ Codex can create an automatic-system-sleep assertion when **Prevent Sleep While 
 |---|---|---|---|
 | Work | Mac and built-in display stay awake. | Mac and all displays stay awake. | External display stays awake. Normal macOS clamshell requirements apply. |
 | Night | Built-in display turns off. The locked Mac keeps working. | All displays turn off. The locked Mac keeps working. | External display turns off. The locked Mac keeps working through Amphetamine. |
-| Travel | Built-in display turns off. The locked Mac keeps working until the timer ends. | All displays turn off. The locked Mac keeps working until the timer ends. | External display turns off. The locked Mac keeps working through Amphetamine until the timer ends. |
+| Travel | Mac locks and keeps working until the timer ends. The display is not kept off. | Mac locks and keeps working until the timer ends. Displays are not kept off. | Mac locks and keeps working until the timer ends. The lid can stay closed. |
 
 Caffeine Modes works with displays and docks that already work correctly with macOS and Amphetamine. It does not add display drivers or fix an unstable cable, dock, or display connection.
 
-You can start Travel in any screen setup. You can then disconnect power and displays and move the closed Mac. Power Protect is required on Apple Silicon. When you reconnect an external display or open the lid, macOS can wake the display. Stay locked and Caffeine Modes turns it off again after 30 seconds. If you unlock, confirm Off or Work. Travel stays active until you confirm or its timer ends.
+You can start Travel in any screen setup. You can then disconnect power and displays and move the closed Mac. Power Protect is required on Apple Silicon. When you reconnect an external display or open the lid, macOS can wake the display. Travel does not turn it off again. The Mac stays locked until you unlock it. Travel stays active until you confirm Off or Work, or its timer ends.
 
 ## FAQ
 
@@ -124,6 +124,16 @@ A task can still fail if it needs a removed disk, device, network adapter, or ne
 Work tells Amphetamine to keep the displays awake. It also restores normal macOS lid behavior. Lock and Escape can hide the screen, but Work is not the supported display-sleep policy.
 
 Night allows display sleep, enables closed-display work, locks the Mac, and requests display sleep only after it verifies the full policy. If the lock screen appears again while Night stays locked, Caffeine Modes requests display sleep again after 30 seconds.
+
+### What if an app asks to keep a display on during Travel?
+
+Travel still starts. The confirmation names the app and warns about battery use and heat. Caffeine Modes then tries to lock the Mac once. It does not quit the app or keep fighting the display.
+
+If the Mac does not lock, Travel and its timer stay active so the protected task keeps running. The menu shows `Mac did not lock` with `Try Lock Again` and `Turn Off Travel`.
+
+### What if Night cannot turn every display off?
+
+Night and its owned Amphetamine session stay active. The menu shows the real result and offers `Retry Display Sleep` and `Turn Off Night`. Caffeine Modes never reports ready Night until the Mac is locked and every online display is asleep.
 
 ## Development
 
@@ -173,8 +183,8 @@ Scripts/check-release-prerequisites.sh
 Build, sign, package, notarize, staple, and verify:
 
 ```sh
-APP_VERSION=1.1.3 BUILD_NUMBER=7 Scripts/release.sh
-APP_VERSION=1.1.3 Scripts/verify-release.sh
+APP_VERSION=1.2.0 BUILD_NUMBER=8 Scripts/release.sh
+APP_VERSION=1.2.0 Scripts/verify-release.sh
 ```
 
 Release artifacts stay under `dist/` and are ignored by Git.
@@ -216,9 +226,9 @@ Test Work, Night, and Travel in these screen setups:
 2. Open laptop with an external display.
 3. Closed laptop with an external display.
 
-For each setup, start from Off. Verify that Work does not lock or turn off a display. Verify that Night and Travel turn off every connected display and keep the locked Mac working. Show the lock screen without unlocking and verify that the displays turn off again. Then unlock. Verify that Caffeine Modes does not change Amphetamine until you confirm Off or Work.
+For each setup, start from Off. Verify that Work does not lock or turn off a display. Verify that Night turns off every connected display and keeps the locked Mac working. Show the lock screen without unlocking and verify that Night turns the displays off again. Verify that Travel locks the Mac and keeps working, but does not turn a display off again after it wakes. Then unlock. Verify that Caffeine Modes does not change Amphetamine until you confirm Off or Work.
 
-For Travel, also disconnect the closed Mac, move it, and reconnect it at a new location. Verify both an external-display reconnect and opening the built-in display. This check does not prove network continuity.
+For Travel, also disconnect the closed Mac, move it, and reconnect it at a new location. Verify both an external-display reconnect and opening the built-in display. Verify that the timer continues and the display can stay on. This check does not prove network continuity.
 
 Check the closed-lid replacement rule separately:
 

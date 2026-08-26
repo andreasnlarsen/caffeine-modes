@@ -40,6 +40,10 @@ public protocol DisplaySleeping: AnyObject {
     func sleepDisplay(timeout: TimeInterval) throws
 }
 
+public protocol DisplayStateInspecting: AnyObject {
+    func currentState() -> DisplayStateObservation
+}
+
 public protocol ModeStateStoring: AnyObject {
     var lastRequestedMode: OperatingMode { get set }
     var ownedSessionSignature: OwnedSessionSignature? { get set }
@@ -60,9 +64,21 @@ public protocol MonotonicTimeProviding: AnyObject {
     var now: TimeInterval { get }
 }
 
+public protocol SafetyPollWaiting: AnyObject {
+    func wait(for interval: TimeInterval)
+}
+
 public final class SystemMonotonicTimeProvider: MonotonicTimeProviding {
     public init() {}
     public var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+}
+
+public final class SystemSafetyPollWaiter: SafetyPollWaiting {
+    public init() {}
+
+    public func wait(for interval: TimeInterval) {
+        Thread.sleep(forTimeInterval: interval)
+    }
 }
 
 public final class SystemTimeProvider: TimeProviding {
@@ -77,7 +93,9 @@ public protocol ModeControlling: AnyObject {
     func disableTriggers() throws
     func runClosedDisplayReadinessTest(authorizingSessionReplacement: Bool) throws
     func handleScreenUnlocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot
-    func resleepAwayModeIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot
+    func resleepNightIfLocked(expectedOwnershipID: UUID?) throws -> ModeSnapshot
+    func retryNightDisplaySleep(expectedOwnershipID: UUID?) throws -> ModeSnapshot
+    func retryTravelLock(expectedOwnershipID: UUID?) throws -> ModeSnapshot
     func hasActiveSessionForQuit() throws -> Bool
     func endActiveSessionForQuit() throws
 }
