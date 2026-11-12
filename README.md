@@ -16,11 +16,13 @@ While the lid is closed, you can replace an active Night, Travel, or other close
 
 Night and Travel can create heat when the Mac is closed. Do not run a Mac in an enclosed bag. A location or network change can still stop a network-dependent task.
 
-## Install for a friend
+Free and open source under the [MIT licence](LICENSE).
+
+## Install
 
 1. Install [Amphetamine from the Mac App Store](https://apps.apple.com/app/amphetamine/id937984704).
 2. Open Amphetamine once.
-3. Install `Caffeine Modes.app` from the notarized DMG in Applications.
+3. Install Caffeine Modes with Homebrew: `brew install --cask andreasnlarsen/tap/caffeine-modes`. Homebrew 6 and later ask you to trust taps outside the official catalogue; if the install is refused with "untrusted tap", run `brew trust andreasnlarsen/tap` once and install again. Or download the notarized DMG from [Releases](https://github.com/andreasnlarsen/caffeine-modes/releases) and drag `Caffeine Modes.app` to Applications.
 4. Open Caffeine Modes. It appears only in the menu bar.
 5. Open Settings, then Setup.
 6. Use the action beside each item that needs attention.
@@ -189,21 +191,15 @@ APP_VERSION=1.2.0 Scripts/verify-release.sh
 
 Release artifacts stay under `dist/` and are ignored by Git.
 
-## Private GitHub backup
+## Publishing a release
 
-The intended private remote is `https://github.com/andreasnlarsen/caffeine-modes.git`.
+The repository is public at `https://github.com/andreasnlarsen/caffeine-modes`. After the two commands above pass:
 
-If GitHub CLI needs authentication, complete this command in your own visible Terminal:
+1. Tag the commit the DMG was built from as `v<version>` and push the tag.
+2. Create the GitHub release for that tag and attach `dist/Caffeine-Modes-<version>.dmg`.
+3. In `andreasnlarsen/homebrew-tap`, set `version` and `sha256` in `Casks/caffeine-modes.rb` to the new DMG and push.
 
-```sh
-gh auth login -h github.com -p https -w
-```
-
-Then create and push the private backup:
-
-```sh
-gh repo create andreasnlarsen/caffeine-modes --private --source=. --remote=origin --push
-```
+To update an installed copy: `brew upgrade --cask caffeine-modes`. To remove it: `brew uninstall --cask caffeine-modes`. Turn the mode Off first, because removing the app does not end an Amphetamine session.
 
 ## Repository structure
 

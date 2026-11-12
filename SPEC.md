@@ -8,7 +8,7 @@ Last updated: 2026-08-27
 
 ## 1. Goal
 
-Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted friends three clear Amphetamine policies: Work keeps the Mac and displays awake, Night keeps a locked Mac working with every connected display verified off, and bounded Travel keeps a locked Mac working through a move without requiring displays to stay off.
+Caffeine Modes is a native macOS menu-bar app that gives three clear Amphetamine policies: Work keeps the Mac and displays awake, Night keeps a locked Mac working with every connected display verified off, and bounded Travel keeps a locked Mac working through a move without requiring displays to stay off.
 
 ## 2. Non-goals
 
@@ -21,7 +21,7 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 ## 3. Target Users
 
 - Primary: Andreas, who uses long-running local work, overnight processing, and short trips between work locations.
-- Secondary: Trusted friends who already use, or can install, Amphetamine 5.3.2 or later.
+- Secondary: Anyone who already uses, or can install, Amphetamine 5.3.2 or later. The app is free and public from 12 November 2026.
 - Environment: A portable Mac on macOS 13 or later.
 
 ## 4. User Stories / Behaviors
@@ -65,7 +65,7 @@ Caffeine Modes is a native macOS menu-bar app that gives Andreas and trusted fri
 
 - P2-001: Evaluate a standalone IOKit backend.
 - P2-002: Evaluate task leases for local automation tools.
-- P2-003: Evaluate public source and Mac App Store distribution.
+- P2-003: Evaluate Mac App Store distribution. The source became public under the MIT licence on 12 November 2026.
 
 ## 6. Quality Gates
 
@@ -127,7 +127,7 @@ Scripts/verify-release.sh
 | Power assertion inspection | Use IOKit | It provides a read-only process-level source for blockers. |
 | Screen-lock policy | Read the local device grace period; use `sysadminctl` only as a pre-macOS-26 fallback | The product must match current Lock Screen settings and fail closed when the policy is not immediate. |
 | Low-battery session end | Use Amphetamine Session Defaults | One backend owns session termination, and the cutoff survives a Caffeine Modes crash. |
-| Updates | Manual DMG | A feed and update framework are deferred until distribution is proven. |
+| Updates | Homebrew cask or manual DMG | `brew upgrade --cask caffeine-modes` replaces the app. A feed and update framework are deferred until distribution is proven. |
 | Analytics | Do not build or buy | Version 1 has no telemetry requirement. |
 
 ## 10. Architecture & Tech Decisions
@@ -323,7 +323,7 @@ Only `OperatingMode`, `PostUnlockMode`, `BatteryProtectionRequirement`, the diag
 - macOS display state: A read-only CoreGraphics snapshot classifies online displays as all asleep, visible, or unavailable. Any query failure, empty result, or unknown fact is unavailable. Night alone uses this result as a success invariant. After a lock or display-sleep request, Caffeine Modes polls the required safety state within the existing two-second transition deadline before it reports a degraded result.
 - macOS display and lock lifecycle: `NSWorkspace` screen notifications plus the current `CGSessionCopyCurrentDictionary` lock state. The distributed unlock event starts a read-only verification. The app then asks for explicit confirmation before it uses the normal Off or Work transition. A locked Night reacts to screen-visibility events. Travel ignores them.
 - ServiceManagement: `SMAppService.mainApp` registration and status.
-- GitHub: Private backup repository at `andreasnlarsen/caffeine-modes` after local GitHub CLI authentication.
+- GitHub: Public repository at `andreasnlarsen/caffeine-modes` under the MIT licence. Each release carries the notarized DMG, and the cask `caffeine-modes` in `andreasnlarsen/homebrew-tap` installs it.
 - Apple notarization: The existing Keychain-backed LEAD MEDIA AS `notarytool` profile named `notchfocus-notary` by default.
 
 ## 14. Design System
