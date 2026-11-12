@@ -10,7 +10,8 @@ compiled_assets="$output_dir/AppIcon.compiled"
 mkdir -p "$iconset" "$compiled_assets"
 cp "$project_root/Resources/AppIcon.xcassets/Contents.json" "$asset_catalog/Contents.json"
 cp "$project_root/Resources/AppIcon.xcassets/AppIcon.appiconset/Contents.json" "$iconset/Contents.json"
-xcrun swift "$project_root/Scripts/generate-icon.swift" "$output_dir/AppIcon-1024.png"
+# The artwork: 1024 pixels square, the tile 824 pixels wide in the middle, as macOS icons are laid out.
+cp "$project_root/Resources/AppIcon.png" "$output_dir/AppIcon-1024.png"
 
 for size in 16 32 128 256 512; do
     sips -z "$size" "$size" "$output_dir/AppIcon-1024.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null

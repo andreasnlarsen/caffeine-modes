@@ -95,7 +95,7 @@ That warning never blocks Travel, never changes the button titles, and never tel
 - The running menu-bar symbols are template images. macOS controls their color.
 - Setup check symbols use semantic tints: `systemGreen` for complete, `systemOrange` for needs action, and `secondaryLabelColor` for not checked. Each state also uses a distinct symbol shape and a VoiceOver state description, so state never depends on color alone.
 - Errors use native `NSAlert` treatment.
-- The Finder icon may use an original navy, cream, amber, blue, and mint palette. These colors do not enter the menu UI.
+- The Finder icon uses an indigo, silver, amber, and mint palette. These colors do not enter the menu UI.
 
 ## Spacing and size
 
@@ -236,7 +236,7 @@ Note 7 is the one fact that appears twice, because About is its permanent home. 
 
 ## Application icon
 
-The icon is generated from original vector-style drawing commands. It shows a cream coffee cup with three distinct steam paths on a navy field. The three paths represent Work, Night, and Travel. The source generator produces a 1024-pixel master and the required `.icns` sizes.
+The icon is supplied artwork, `Resources/AppIcon.png`: a closed silver Mac with one mint status light, under an amber crescent moon, on an indigo tile. It says what Night and Travel do: the Mac keeps working while it is closed. `Scripts/generate-icon.sh` makes the required `.icns` sizes from that 1024-pixel master. Until 1.2.0 the icon was a drawn coffee cup with three steam paths.
 
 ## Accessibility and input
 

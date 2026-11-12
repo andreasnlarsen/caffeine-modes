@@ -185,8 +185,8 @@ Scripts/check-release-prerequisites.sh
 Build, sign, package, notarize, staple, and verify:
 
 ```sh
-APP_VERSION=1.2.0 BUILD_NUMBER=8 Scripts/release.sh
-APP_VERSION=1.2.0 Scripts/verify-release.sh
+APP_VERSION=1.2.1 BUILD_NUMBER=9 Scripts/release.sh
+APP_VERSION=1.2.1 Scripts/verify-release.sh
 ```
 
 Release artifacts stay under `dist/` and are ignored by Git.

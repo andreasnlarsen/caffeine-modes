@@ -2,7 +2,7 @@
 
 Status: Active implementation contract
 
-Version: 1.2.0
+Version: 1.2.1
 
 Last updated: 2026-08-27
 

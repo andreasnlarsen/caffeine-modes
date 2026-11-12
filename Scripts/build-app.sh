@@ -6,8 +6,8 @@ app_name="Caffeine Modes"
 bundle="$project_root/build/$app_name.app"
 contents="$bundle/Contents"
 identity="${CODE_SIGN_IDENTITY:--}"
-app_version="${APP_VERSION:-1.2.0}"
-build_number="${BUILD_NUMBER:-8}"
+app_version="${APP_VERSION:-1.2.1}"
+build_number="${BUILD_NUMBER:-9}"
 
 mkdir -p "$project_root/build" "$project_root/dist"
 if [[ -e "$bundle" ]]; then
